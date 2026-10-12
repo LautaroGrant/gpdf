@@ -2,6 +2,7 @@
 #include "PageView.h"
 #include "AnnotationExport.h"
 #include "SessionStore.h"
+#include "NativeScrollCursor.h"
 
 class Window : public QMainWindow {
 public:
@@ -112,16 +113,16 @@ public:
         pageLabel = new QLabel("  —  "); bar->addWidget(pageLabel);
         action("›",[this]{ page(1); });
         bar->addSeparator();
-        action("−",[this]{ zoom(-0.25); });
+        action("−",[this]{ zoom(-0.10); });
         zoomPercent=new QSpinBox; zoomPercent->setObjectName("zoomPercent");
-        zoomPercent->setRange(1,10000); zoomPercent->setSuffix("%"); zoomPercent->setSingleStep(25);
+        zoomPercent->setRange(1,10000); zoomPercent->setSuffix("%"); zoomPercent->setSingleStep(10);
         zoomPercent->setButtonSymbols(QAbstractSpinBox::NoButtons);
         zoomPercent->setAlignment(Qt::AlignCenter); zoomPercent->setFixedWidth(72);
         zoomPercent->setKeyboardTracking(false); zoomPercent->setValue(int(std::lround(view->scale*100)));
         zoomPercent->setToolTip("Zoom del documento (50%–300%). En dos páginas se ajusta al ancho disponible.");
         bar->addWidget(zoomPercent);
         connect(zoomPercent,&QSpinBox::valueChanged,[this](int value){ setZoom(value/100.0); });
-        action("+",[this]{ zoom(0.25); });
+        action("+",[this]{ zoom(0.10); });
         bar->addSeparator();
         searchAction=new QAction("Búsqueda",this); addAction(searchAction);
         searchAction->setObjectName("searchAction"); searchAction->setCheckable(true);
@@ -178,13 +179,14 @@ public:
         view->navigate=[this](int direction){ page(direction); };
         view->annotationMoved=[this](int index){ refresh(index); };
         scroll->viewport()->installEventFilter(this);
-        connect(scroll->verticalScrollBar(),&QScrollBar::valueChanged,[this](int){ if(!updatingView) lastSearchRow=-1; scrolling(); });
+        connect(scroll->verticalScrollBar(),&QScrollBar::valueChanged,[this](int){ view->hideComment(); if(!updatingView) lastSearchRow=-1; scrolling(); });
         view->changed=[this]{ refresh(view->tool==PageView::Eraser ? -1 : pdf.annotationCount()-1); }; view->report=[this](QString message){ error(message); };
         selectAnnotation(-1);
         createFileActions(); createEditActions(); createViewActions(); createReadingActions(); createGoActions(); createShortcutActions(); updateToolTips(); installFileMenu();
         autoScrollTimer=new QTimer(this); autoScrollTimer->setObjectName("autoScrollTimer"); autoScrollTimer->setInterval(16);
         connect(autoScrollTimer,&QTimer::timeout,this,[this]{
             int distance=QCursor::pos().y()-autoScrollOrigin.y();
+            updateAutoScrollCursor(distance);
             double beyond=std::max(0,std::abs(distance)-12);
             int speed=int(std::min(1200.0,beyond*beyond/600.0))*(distance<0 ? -1 : 1);
             auto bar=scroll->verticalScrollBar(); bar->setValue(bar->value()+speed);
@@ -206,6 +208,32 @@ public:
 #endif
     }
     void openDocument(const QString& path) { openPath(path); }
+    void presentForExternalOpen() {
+        bool minimized=isMinimized();
+        auto restore=windowState() & ~Qt::WindowMinimized;
+#ifdef Q_OS_WIN
+        auto hwnd=reinterpret_cast<HWND>(winId());
+        WINDOWPLACEMENT placement{}; placement.length=sizeof(placement);
+        if(IsIconic(hwnd)) {
+            minimized=true;
+            if(GetWindowPlacement(hwnd,&placement) && (placement.flags & WPF_RESTORETOMAXIMIZED)) restore|=Qt::WindowMaximized;
+        }
+#endif
+        if(minimized && !(restore & (Qt::WindowMaximized|Qt::WindowFullScreen))) restore=lastVisibleState;
+        if(restore.testFlag(Qt::WindowFullScreen)) showFullScreen();
+        else if(restore.testFlag(Qt::WindowMaximized)) showMaximized();
+        else if(minimized) showNormal();
+        else show();
+        raise(); activateWindow();
+#ifdef Q_OS_WIN
+        if(QApplication::platformName()=="windows") SetForegroundWindow(hwnd);
+#endif
+    }
+    void openExternalDocuments(const QStringList& paths) {
+        presentForExternalOpen();
+        for(const auto& path:paths) openDocument(path);
+        presentForExternalOpen();
+    }
     void loadPath(const QString& path) {
         if(!view->finishText()) return;
         if(pdf.open(path)) { documents.clear(); documents.push_back(std::make_unique<DocumentState>()); activeDocument=0; documentOpened(path); }
@@ -312,6 +340,13 @@ protected:
     void resizeEvent(QResizeEvent* event) override { QMainWindow::resizeEvent(event); updateToolbarLayout(); }
     void changeEvent(QEvent* event) override {
         QMainWindow::changeEvent(event);
+        if(event->type()==QEvent::WindowStateChange) {
+            if(!isMinimized()) lastVisibleState=windowState() & (Qt::WindowMaximized|Qt::WindowFullScreen);
+            else {
+                auto old=static_cast<QWindowStateChangeEvent*>(event)->oldState();
+                if(!old.testFlag(Qt::WindowMinimized)) lastVisibleState=old & (Qt::WindowMaximized|Qt::WindowFullScreen);
+            }
+        }
         if(event->type()==QEvent::WindowStateChange && isFullScreen()) {
             installFileMenu();
             QTimer::singleShot(0,this,[this]{ if(isFullScreen()) installFileMenu(); });
@@ -321,6 +356,9 @@ protected:
 #ifdef Q_OS_WIN
     bool nativeEvent(const QByteArray& type,void* message,qintptr* result) override {
         auto msg=static_cast<MSG*>(message);
+        if(msg->message==WM_SETCURSOR && LOWORD(msg->lParam)==HTCLIENT && autoScrollTimer && autoScrollTimer->isActive()) {
+            if(auto cursor=NativeScrollCursor::handle(autoScrollDirection)) { SetCursor(cursor); *result=TRUE; return true; }
+        }
         if(restoringMaximizedFrame && msg->message==WM_WINDOWPOSCHANGING) {
             auto position=reinterpret_cast<WINDOWPOS*>(msg->lParam);
             // Qt first applies the old normal rectangle. Keep the frame at its final
@@ -369,6 +407,10 @@ protected:
             }
         }
 #endif
+        if(view && view->commentVisible() && (event->type()==QEvent::MouseButtonPress || event->type()==QEvent::MouseButtonDblClick)) {
+            auto widget=qobject_cast<QWidget*>(object);
+            if(widget && widget->window()==this && !view->commentContains(widget)) view->hideComment();
+        }
         if(event->type()==QEvent::Wheel && static_cast<QWheelEvent*>(event)->modifiers().testFlag(Qt::ControlModifier)) {
             auto widget=qobject_cast<QWidget*>(object);
             if(widget && (widget==view || widget==scroll->viewport())) {
@@ -389,10 +431,14 @@ protected:
         if(pdf.loaded() && (object==view || object==scroll->viewport()) && (event->type()==QEvent::MouseButtonPress || event->type()==QEvent::MouseButtonDblClick) && static_cast<QMouseEvent*>(event)->button()==Qt::MiddleButton) {
             if(!view->finishText()) return true;
             autoScrollOrigin=static_cast<QMouseEvent*>(event)->globalPosition().toPoint();
-            QPixmap icon(32,32); icon.fill(Qt::transparent); QPainter painter(&icon); painter.setRenderHint(QPainter::Antialiasing);
-            painter.setPen(QPen(QColor("#374151"),1)); painter.setBrush(QColor(255,255,255,230)); painter.drawEllipse(QRectF(1,1,30,30));
-            painter.setBrush(QColor("#374151")); painter.drawPolygon(QPolygonF{QPointF(16,5),QPointF(11,11),QPointF(21,11)}); painter.drawPolygon(QPolygonF{QPointF(16,27),QPointF(11,21),QPointF(21,21)}); painter.drawEllipse(QPointF(16,16),2,2); painter.end();
-            QApplication::setOverrideCursor(QCursor(icon,16,16)); autoScrollTimer->start(); return true;
+            autoScrollDirection=NativeScrollCursor::Neutral;
+            QApplication::setOverrideCursor(NativeScrollCursor::cursor(autoScrollDirection));
+            if(!autoScrollAnchor) { autoScrollAnchor=new QLabel(scroll->viewport()); autoScrollAnchor->setObjectName("autoScrollAnchor"); autoScrollAnchor->setAttribute(Qt::WA_TransparentForMouseEvents); }
+            auto pixmap=NativeScrollCursor::cursor(NativeScrollCursor::Neutral).pixmap();
+            autoScrollAnchor->setPixmap(pixmap); autoScrollAnchor->resize(pixmap.size());
+            autoScrollAnchor->move(scroll->viewport()->mapFromGlobal(autoScrollOrigin)-QPoint(pixmap.width()/2,pixmap.height()/2));
+            autoScrollAnchor->show(); autoScrollAnchor->raise();
+            autoScrollTimer->start(); updateAutoScrollCursor(0); return true;
         }
         if(!pdf.loaded() && (object==view || object==scroll->viewport()) && event->type()==QEvent::MouseButtonPress) {
             auto mouse=static_cast<QMouseEvent*>(event);
@@ -402,8 +448,12 @@ protected:
             auto key=static_cast<QKeyEvent*>(event);
             auto widget=qobject_cast<QWidget*>(object);
             if(widget && widget->window()==this) {
+                if(view->commentContains(widget) && (key->matches(QKeySequence::Copy) || key->matches(QKeySequence::SelectAll))) {
+                    if(event->type()==QEvent::ShortcutOverride) { key->accept(); return true; }
+                    return false;
+                }
                 bool editing=false;
-                for(auto parent=widget;parent && parent!=this;parent=parent->parentWidget()) if(qobject_cast<QLineEdit*>(parent) || qobject_cast<QTextEdit*>(parent) || qobject_cast<QComboBox*>(parent) || qobject_cast<QAbstractSpinBox*>(parent)) { editing=true; break; }
+                for(auto parent=widget;parent && parent!=this;parent=parent->parentWidget()) if(qobject_cast<QLineEdit*>(parent) || qobject_cast<QTextEdit*>(parent) || qobject_cast<QPlainTextEdit*>(parent) || qobject_cast<QComboBox*>(parent) || qobject_cast<QAbstractSpinBox*>(parent)) { editing=true; break; }
                 QKeySequence pressed=key->key()==Qt::Key_Backtab ? QKeySequence(Qt::CTRL|Qt::SHIFT|Qt::Key_Tab) : QKeySequence(key->keyCombination());
                 for(auto action:shortcutActions) {
                     if(editing && (action->objectName()=="deleteSelectionAction" || ((action->objectName()=="goPrevious" || action->objectName()=="goNext") && key->modifiers()==Qt::NoModifier))) continue;
@@ -411,7 +461,7 @@ protected:
                     QString name=action->objectName();
                     bool inlineActive=view->findChild<QWidget*>("inlineTextEditor")!=nullptr;
                     if(name=="confirmTextAction" && (!inlineActive || QApplication::focusWidget()==searchInput)) continue;
-                    if(name=="cancelContextAction" && !inlineActive && !autoScrollTimer->isActive() && !isFullScreen()) continue;
+                    if(name=="cancelContextAction" && !inlineActive && !autoScrollTimer->isActive() && !view->commentVisible() && !isFullScreen()) continue;
                     if(name=="searchEnterAction" && QApplication::focusWidget()!=searchInput) continue;
                     for(const auto& shortcut:action->shortcuts()) if(!shortcut.isEmpty() && shortcut==pressed) {
                         if(event->type()==QEvent::ShortcutOverride) key->accept(); else action->trigger();
@@ -438,6 +488,7 @@ protected:
         event->accept();
     }
 private:
+    Qt::WindowStates lastVisibleState=Qt::WindowNoState;
     bool printDialogActive=false;
     int zoomWheelRemainder=0;
     Qt::WindowStates fullscreenRestoreState=Qt::WindowNoState;
@@ -976,7 +1027,7 @@ private:
         extra("Documento siguiente","nextDocumentAction","Ctrl+Tab",[this]{ if(documents.size()>1) switchDocument((activeDocument+1)%int(documents.size())); });
         extra("Documento anterior","previousDocumentAction","Ctrl+Shift+Tab",[this]{ if(documents.size()>1) switchDocument((activeDocument+int(documents.size())-1)%int(documents.size())); });
         auto confirm=extra("Confirmar texto (durante edición)","confirmTextAction","Return",[this]{ view->finishText(); }); removeAction(confirm);
-        auto cancel=extra("Cancelar / detener / salir de pantalla completa","cancelContextAction","Esc",[this]{ if(autoScrollTimer->isActive()) stopAutoScroll(); else if(view->findChild<QWidget*>("inlineTextEditor")) view->cancelText(); else if(isFullScreen()) { setFullscreen(false); } }); removeAction(cancel);
+        auto cancel=extra("Cancelar / detener / salir de pantalla completa","cancelContextAction","Esc",[this]{ if(autoScrollTimer->isActive()) stopAutoScroll(); else if(view->commentVisible()) view->hideComment(); else if(view->findChild<QWidget*>("inlineTextEditor")) view->cancelText(); else if(isFullScreen()) { setFullscreen(false); } }); removeAction(cancel);
         auto enter=extra("Buscar / resultado siguiente (en Búsqueda)","searchEnterAction","Return",[this]{ searchEnter(); }); removeAction(enter);
         shortcutsMenu=new QMenu("&Atajos",this);
         auto configure=extra("Ver y modificar atajos…","configureShortcutsAction",{},[this]{ configureShortcuts(); }); shortcutsMenu->addAction(configure); shortcutMenuActions.append(configure);
@@ -1094,8 +1145,20 @@ private:
     }
     QTimer* autoScrollTimer=nullptr;
     QPoint autoScrollOrigin;
+    QLabel* autoScrollAnchor=nullptr;
+    NativeScrollCursor::Direction autoScrollDirection=NativeScrollCursor::Neutral;
     QTimer* scrollSyncTimer=nullptr;
-    void stopAutoScroll() { if(autoScrollTimer && autoScrollTimer->isActive()) { autoScrollTimer->stop(); QApplication::restoreOverrideCursor(); } }
+    void updateAutoScrollCursor(int distance) {
+        auto direction=distance < -12 ? NativeScrollCursor::Up : distance > 12 ? NativeScrollCursor::Down : NativeScrollCursor::Neutral;
+        if(direction!=autoScrollDirection) { autoScrollDirection=direction; QApplication::changeOverrideCursor(NativeScrollCursor::cursor(direction)); }
+#ifdef Q_OS_WIN
+        if(QApplication::platformName()=="windows") if(auto cursor=NativeScrollCursor::handle(direction)) SetCursor(cursor);
+#endif
+    }
+    void stopAutoScroll() {
+        if(autoScrollTimer && autoScrollTimer->isActive()) { autoScrollTimer->stop(); QApplication::restoreOverrideCursor(); }
+        if(autoScrollAnchor) autoScrollAnchor->hide();
+    }
     struct DocumentState {
         QString id=QUuid::createUuid().toString(QUuid::WithoutBraces);
         quint64 backupRevision=0;

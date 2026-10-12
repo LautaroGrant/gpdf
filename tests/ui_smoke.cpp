@@ -138,8 +138,8 @@ int main(int argc,char** argv) {
         QAction* zoomPlus=nullptr; QAction* zoomMinus=nullptr;
         for(auto a:window.findChildren<QAction*>()) { if(a->text()=="+") zoomPlus=a; if(a->text()=="−") zoomMinus=a; }
         require(zoomPlus && zoomMinus,"zoom buttons available");
-        zoomPlus->trigger(); require(zoomPercent->value()==125 && view->scale==1.25,"plus synchronizes percentage");
-        zoomMinus->trigger(); require(zoomPercent->value()==100 && view->scale==1.0,"minus synchronizes percentage");
+        zoomPlus->trigger(); require(zoomPercent->value()==110 && qFuzzyCompare(view->scale,1.10),"toolbar plus advances ten percentage points");
+        zoomMinus->trigger(); require(zoomPercent->value()==100 && view->scale==1.0,"toolbar minus decreases ten percentage points");
         zoomPercent->setValue(50); zoomMinus->trigger(); require(zoomPercent->value()==50,"zoom lower limit");
         zoomPercent->setValue(300); zoomPlus->trigger(); require(zoomPercent->value()==300,"zoom upper limit");
         zoomPercent->setValue(125);
@@ -197,6 +197,7 @@ int main(int argc,char** argv) {
         QMouseEvent press(QEvent::MouseButtonPress,notePoint,notePoint,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
         QApplication::sendEvent(view,&press);
         require(view->pdf.pageIndex()==1 && list->count()==1 && list->item(0)->text().contains("Nota de página dos"),"continuous annotation belongs to clicked page");
+        require(view->commentVisible() && view->findChild<QTextEdit*>("commentContents")->toPlainText()=="Nota de página dos","new comment opens its contents on the page");
         mode->setCurrentIndex(1);
         require(view->pageRects[0].isEmpty() && !view->pageRects[1].isEmpty() && view->pageRects[2].isEmpty(),"single mode shows only current page");
         snapshot("single-view");
@@ -485,16 +486,34 @@ int main(int argc,char** argv) {
         QMouseEvent middle(QEvent::MouseButtonPress,local,global,Qt::MiddleButton,Qt::MiddleButton,Qt::NoModifier);
         QApplication::sendEvent(view,&middle);
         require(autoTimer->isActive() && QApplication::overrideCursor(),"middle click starts scrolling cursor");
+        auto anchor=window.findChild<QLabel*>("autoScrollAnchor");
+        require(anchor && anchor->isVisible(),"autoscroll keeps an anchor indicator on the page");
+#ifdef Q_OS_WIN
+        require(NativeScrollCursor::handle(NativeScrollCursor::Neutral) && NativeScrollCursor::handle(NativeScrollCursor::Up) && NativeScrollCursor::handle(NativeScrollCursor::Down),"Windows supplies all three native vertical scroll cursors");
+        require(QApplication::overrideCursor()->pixmap().cacheKey()==NativeScrollCursor::cursor(NativeScrollCursor::Neutral).pixmap().cacheKey(),"autoscroll starts with native neutral arrows");
+        if(!output.isEmpty()) {
+            NativeScrollCursor::cursor(NativeScrollCursor::Neutral).pixmap().save(output+"/native-scroll-neutral.png");
+            NativeScrollCursor::cursor(NativeScrollCursor::Up).pixmap().save(output+"/native-scroll-up.png");
+            NativeScrollCursor::cursor(NativeScrollCursor::Down).pixmap().save(output+"/native-scroll-down.png");
+        }
+#endif
         QCursor::setPos(global+QPoint(0,150));
         int before=scrollArea->verticalScrollBar()->value(); QMetaObject::invokeMethod(autoTimer,"timeout");
         require(scrollArea->verticalScrollBar()->value()>before,"cursor below anchor scrolls down");
+#ifdef Q_OS_WIN
+        require(QApplication::overrideCursor()->pixmap().cacheKey()==NativeScrollCursor::cursor(NativeScrollCursor::Down).pixmap().cacheKey(),"downward scrolling uses Windows down cursor");
+        if(QApplication::platformName()=="windows") require(GetCursor()==NativeScrollCursor::handle(NativeScrollCursor::Down),"native Windows cursor handle is installed for downward scrolling");
+#endif
         QCursor::setPos(global-QPoint(0,150)); QMetaObject::invokeMethod(autoTimer,"timeout");
         require(scrollArea->verticalScrollBar()->value()==before,"cursor above anchor scrolls up");
+#ifdef Q_OS_WIN
+        require(QApplication::overrideCursor()->pixmap().cacheKey()==NativeScrollCursor::cursor(NativeScrollCursor::Up).pixmap().cacheKey(),"upward scrolling uses Windows up cursor");
+#endif
         QCursor::setPos(global+QPoint(0,300)); QMetaObject::invokeMethod(autoTimer,"timeout");
         require(scrollArea->verticalScrollBar()->value()-before>50,"autoscroll accelerates at greater distance");
 
         QKeyEvent escapeScroll(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier); QApplication::sendEvent(view,&escapeScroll);
-        require(!autoTimer->isActive() && !QApplication::overrideCursor(),"Escape restores cursor");
+        require(!autoTimer->isActive() && !QApplication::overrideCursor() && !anchor->isVisible(),"Escape restores cursor and removes anchor");
         QApplication::sendEvent(view,&middle); QApplication::sendEvent(view,&middle);
         require(!autoTimer->isActive(),"another middle click stops scrolling");
         QMouseEvent middleDouble(QEvent::MouseButtonDblClick,local,global,Qt::MiddleButton,Qt::MiddleButton,Qt::NoModifier);
@@ -900,6 +919,81 @@ int main(int argc,char** argv) {
             input->setText("study"); QMetaObject::invokeMethod(input,"returnPressed");
             wait.restart(); while(results->count()!=12 && wait.elapsed()<4000) { app.processEvents(); QThread::msleep(1); }
             require(results->count()==12,"cancelled searches cannot replace current results");
+        }
+        {
+            // Exercise the real second-process IPC path while the reader is minimized.
+            Window receiving; receiving.openDocument(fixture); receiving.showMaximized(); app.processEvents();
+            require(receiving.isMaximized(),"external-opening fixture is maximized");
+            receiving.showMinimized(); app.processEvents();
+            require(receiving.isMinimized(),"external-opening fixture is minimized");
+            instance.received=[&](const QStringList& paths){ receiving.openExternalDocuments(paths); };
+            QProcess forwarded; forwarded.start(QCoreApplication::applicationFilePath(),QStringList{"--instance-client",instanceKey,second});
+            QElapsedTimer wait; wait.start();
+            auto tabs=receiving.findChild<QTabBar*>("documentTabs");
+            while((forwarded.state()!=QProcess::NotRunning || tabs->count()!=2) && wait.elapsed()<8000) {
+                app.processEvents(); if(forwarded.state()!=QProcess::NotRunning) forwarded.waitForFinished(10);
+            }
+            app.processEvents();
+            require(forwarded.state()==QProcess::NotRunning && forwarded.exitCode()==0 && tabs->count()==2,"external process adds the PDF to the existing reader");
+            require(receiving.isMaximized() && !receiving.isMinimized(),"external PDF restores the maximized window");
+#ifdef Q_OS_WIN
+            if(QApplication::platformName()=="windows") {
+                auto hwnd=reinterpret_cast<HWND>(receiving.winId());
+                require(IsZoomed(hwnd) && !IsIconic(hwnd),"external PDF restores the actual Windows maximized frame");
+            }
+#endif
+            receiving.openExternalDocuments({fixture}); app.processEvents();
+            require(receiving.isMaximized() && tabs->count()==2,"opening another PDF preserves a visible maximized window");
+            receiving.showNormal(); receiving.resize(1100,720); app.processEvents(); auto normal=receiving.size();
+            receiving.showMinimized(); app.processEvents(); receiving.openExternalDocuments({second}); app.processEvents();
+            require(!receiving.isMinimized() && !receiving.isMaximized() && receiving.size()==normal,"external PDF restores a normal window without maximizing it");
+            instance.received=[&](QStringList paths){ delivered=paths; };
+        }
+        {
+            const QString contents="Comentario de prueba: Cortázar y acción.\nSegunda línea con <texto literal> y símbolos.\nEste comentario se lee sin modificar el PDF.";
+            PdfDocument fixture; require(fixture.createSample(2) && fixture.note({60,680},contents),"popup fixture");
+            const QString path=directory.path()+"/comment-popup.pdf"; require(fixture.saveCopy(path),"save popup fixture");
+            Window reader; reader.show(); reader.openDocument(path); app.processEvents();
+            PageView* canvas=nullptr; for(auto widget:reader.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) canvas=page;
+            auto modes=reader.findChild<QComboBox*>("viewMode"); auto area=reader.findChild<QScrollArea*>();
+            require(canvas && modes && area,"popup controls");
+            auto click=[&](QPointF position) {
+                QMouseEvent event(QEvent::MouseButtonPress,position,canvas->mapToGlobal(position.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+                QApplication::sendEvent(canvas,&event);
+            };
+            for(int mode=0;mode<3;++mode) {
+                modes->setCurrentIndex(mode); app.processEvents(); canvas->tool=PageView::Select;
+                click(canvas->devicePoint(canvas->pdf.annotationRect(0).center()));
+                auto popup=canvas->findChild<QFrame*>("commentPopup"); auto text=canvas->findChild<QTextEdit*>("commentContents");
+                require(canvas->commentVisible() && text && text->toPlainText()==contents && text->isReadOnly(),"Select opens the existing comment in each view");
+                auto visible=QRect(canvas->mapFrom(area->viewport(),QPoint()),area->viewport()->size()).intersected(canvas->activeRect().toAlignedRect());
+                require(popup && visible.contains(popup->geometry()),"comment popup stays within the visible page");
+                require(!canvas->pdf.dirty() && canvas->pdf.annotationCount()==1,"reading a comment does not modify or duplicate it");
+                QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier); QApplication::sendEvent(text,&escape);
+                require(!canvas->commentVisible(),"Escape closes the comment popup");
+                canvas->tool=PageView::Note;
+                bool dialogOpened=false; QTimer guard; guard.setSingleShot(true);
+                QObject::connect(&guard,&QTimer::timeout,[&]{ if(auto dialog=qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) { dialogOpened=true; dialog->reject(); } });
+                guard.start(0); click(canvas->devicePoint(canvas->pdf.annotationRect(0).center())); guard.stop();
+                require(!dialogOpened && canvas->commentVisible() && canvas->pdf.annotationCount()==1,"Comment tool opens a note instead of creating another one");
+                text->setFocus(); QKeyEvent select(QEvent::KeyPress,Qt::Key_A,Qt::ControlModifier); QApplication::sendEvent(text,&select);
+                QKeyEvent copy(QEvent::KeyPress,Qt::Key_C,Qt::ControlModifier); QApplication::sendEvent(text,&copy);
+                require(QApplication::clipboard()->text()==contents,"popup text supports select-all and copy");
+                if(!output.isEmpty()) {
+                    for(int pass=0;pass<3;++pass) { app.processEvents(); canvas->workers.waitForDone(); }
+                    reader.grab().save(output+QString("/comment-popup-mode-%1.png").arg(mode));
+                }
+                reader.findChild<QToolButton*>("closeCommentPopup")->click(); require(!canvas->commentVisible(),"close button dismisses comment");
+            }
+            modes->setCurrentIndex(0); canvas->tool=PageView::Select;
+            click(canvas->devicePoint(canvas->pdf.annotationRect(0).center()));
+            auto popupDark=reader.findChild<QAction*>("darkModeAction"); if(!popupDark->isChecked()) popupDark->trigger(); app.processEvents();
+            require(canvas->darkMode && canvas->commentVisible(),"comment remains available in dark mode");
+            if(!output.isEmpty()) reader.grab().save(output+"/comment-popup-dark.png");
+            QMouseEvent outside(QEvent::MouseButtonPress,QPointF(4,4),reader.mapToGlobal(QPoint(4,4)),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+            QApplication::sendEvent(reader.findChild<QToolBar*>("mainToolbar"),&outside);
+            require(!canvas->commentVisible(),"click outside the popup dismisses it");
+            if(popupDark->isChecked()) popupDark->trigger();
         }
         std::cout << "PASS: three view modes, scroll, paired navigation, correct-page annotations, editing and deletion.\n";
         return 0;

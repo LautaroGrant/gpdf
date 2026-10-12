@@ -25,15 +25,11 @@ int main(int argc,char** argv) {
     bool startupReady=false; QStringList pendingLaunches;
     instance.received=[&](const QStringList& incoming) {
         if(!startupReady) { pendingLaunches+=incoming; return; }
-        for(const auto& path:incoming) window.openDocument(path);
-        if(window.isMinimized()) window.showNormal();
-        window.raise(); window.activateWindow();
-#ifdef Q_OS_WIN
-        SetForegroundWindow(reinterpret_cast<HWND>(window.winId()));
-#endif
+        window.openExternalDocuments(incoming);
     };
     if(!snapshot) { window.restoreSession(); window.restoreWindow(); }
     for(const auto& path:paths) window.openDocument(path);
+    if(!snapshot && !paths.isEmpty()) window.presentForExternalOpen();
     startupReady=true; if(!pendingLaunches.isEmpty()) instance.received(pendingLaunches);
     if(snapshot) {
         QTimer::singleShot(300,[&]{ const bool ok=window.grab().save(arguments[3]); app.exit(ok ? 0 : 1); });

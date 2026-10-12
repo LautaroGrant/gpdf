@@ -3,6 +3,8 @@
 - `AppIdentity.h`: identidad heredada de almacenamiento e IPC para conservar los datos anteriores al renombrado.
 - `main.cpp`: configuración y arranque, instancia única, argumentos y restauración inicial.
 - `Window.h`: coordinación de documentos, acciones, búsqueda, sesión y paneles.
+- `CommentPopup`: contenido de comentarios, seleccionable y de solo lectura, limitado a la región visible de la página.
+- `NativeScrollCursor`: carga de los recursos de desplazamiento vertical de user32.dll y adaptación al cursor e indicador de Qt.
 - `PageView.h`: geometría, interacción con páginas, selección, texto y cachés de renderizado.
 - `UiSupport.h`: controles auxiliares, delegado de búsqueda, iconos y soporte nativo de Windows.
 - `SessionStore`: lectura, guardado atómico del manifiesto y limpieza posterior de respaldos.

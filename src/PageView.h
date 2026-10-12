@@ -1,5 +1,6 @@
 #pragma once
 #include "UiSupport.h"
+#include "CommentPopup.h"
 
 class PageView : public QWidget {
 public:
@@ -54,6 +55,7 @@ public:
         if(textEditor) { textEditor->hide(); textEditor->deleteLater(); textEditor=nullptr; textInput=nullptr; }
     }
     void beginText(QPointF point,int annotation=-1) {
+        hideComment();
         if(!finishText()) return;
         editingText=annotation;
         QString contents;
@@ -126,14 +128,15 @@ public:
     }
     void newDocument() { invalidateCache(); resetSelection(); searchPage=-1; searchRects.clear(); sizes.clear(); for(int i=0;i<pdf.pageCount();++i) sizes.append(pdf.pageSize(i)); }
     void refresh() {
+        hideComment();
         invalidateCache(pdf.pageIndex(),true);
         rebuild(); update();
     }
     void setDarkMode(bool value) { darkMode=value; invalidateCache(); previewText(); update(); }
     void setMode(Mode value) { mode=value; resetSelection(); invalidateCache(); rebuild(); update(); }
-    void setZoom(double value) { if(qFuzzyCompare(scale,value)) return; scale=value; invalidateCache(-1,true); rebuild(); update(); }
-    void setFit(Fit value) { if(fit==value) return; fit=value; invalidateCache(-1,true); rebuild(); update(); }
-    void setRotation(int value) { rotation=(value%4+4)%4; invalidateCache(); rebuild(); update(); }
+    void setZoom(double value) { hideComment(); if(qFuzzyCompare(scale,value)) return; scale=value; invalidateCache(-1,true); rebuild(); update(); }
+    void setFit(Fit value) { hideComment(); if(fit==value) return; fit=value; invalidateCache(-1,true); rebuild(); update(); }
+    void setRotation(int value) { hideComment(); rotation=(value%4+4)%4; invalidateCache(); rebuild(); update(); }
     QSizeF displaySize(int index) const { auto size=sizes[index]; return rotation%2 ? QSizeF(size.height(),size.width()) : size; }
     void setViewportSize(QSize size) {
         bool heightChanged=viewportHeight!=size.height(); viewportHeight=size.height();
@@ -180,7 +183,18 @@ public:
         if(mode==Double) { totalWidth=x; y=maxHeight+32; }
         setFixedSize(int(std::ceil(totalWidth)),int(std::ceil(y)));
     }
-    void resetSelection() { first=last=selectedAnnotation=-1; allTextSelected=false; stroke.clear(); }
+    bool commentVisible() const { return commentPopup && commentPopup->isVisible(); }
+    bool commentContains(QWidget* widget) const { return commentVisible() && (widget==commentPopup || commentPopup->isAncestorOf(widget)); }
+    void hideComment() { if(commentPopup) commentPopup->hide(); }
+    void showComment(int index) {
+        if(index<0 || pdf.annotationType(index)!=FPDF_ANNOT_TEXT) { hideComment(); return; }
+        if(!commentPopup) commentPopup=new CommentPopup(this);
+        auto available=rect();
+        if(auto viewport=parentWidget()) available=QRect(mapFrom(viewport,QPoint()),viewport->size()).intersected(rect());
+        available=available.intersected(activeRect().toAlignedRect());
+        commentPopup->showContents(pdf.annotationContents(index),deviceRect(pdf.annotationRect(index)).toAlignedRect(),available);
+    }
+    void resetSelection() { hideComment(); first=last=selectedAnnotation=-1; allTextSelected=false; stroke.clear(); }
     int pageAt(QPointF point) const { for(int i=0;i<pageRects.size();++i) if(!pageRects[i].isEmpty() && pageRects[i].contains(point)) return i; return -1; }
     QRectF activeRect() const { return pdf.pageIndex()<pageRects.size() ? pageRects[pdf.pageIndex()] : QRectF(); }
     QPointF pdfPoint(QPointF point) const {
@@ -291,9 +305,13 @@ protected:
         activate(index);
         const auto p=pdfPoint(event->position());
         allTextSelected=false;
-        int hit=tool==Select ? annotationAt(p) : textAnnotationAt(p);
+        int hit=(tool==Select || tool==Note) ? annotationAt(p) : textAnnotationAt(p);
+        if(tool==Note && hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_TEXT) {
+            first=last=-1; selectedAnnotation=hit; if(annotationSelected) annotationSelected(hit);
+            showComment(hit); update(); return;
+        }
         if(tool==Eraser) { eraseAt(event->position()); return; }
-        if(tool==Select) { searchPage=-1; searchRects.clear(); selectedAnnotation=hit; if(annotationSelected) annotationSelected(hit); first=last=hit>=0 ? -1 : pdf.characterAt(p); dragStart=event->position(); dragOffset={}; draggingText=false; dragCandidate=hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_FREETEXT && pdf.canEditAnnotation(hit); update(); }
+        if(tool==Select) { searchPage=-1; searchRects.clear(); selectedAnnotation=hit; if(annotationSelected) annotationSelected(hit); first=last=hit>=0 ? -1 : pdf.characterAt(p); dragStart=event->position(); dragOffset={}; draggingText=false; dragCandidate=hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_FREETEXT && pdf.canEditAnnotation(hit); showComment(hit); update(); }
         else if(tool==Pen) { stroke={p}; update(); }
         else if(tool==Text) {
             beginText(p,hit);
@@ -301,7 +319,8 @@ protected:
             bool accepted;
             const QString value=studyMultilineText(this,tool==Note ? "Comentario" : "Escribir en la página",{},&accepted);
             if(accepted && !value.trimmed().isEmpty()) {
-                if(!(tool==Note ? pdf.note(p,value) : pdf.freeText(p,value))) report(pdf.error()); else changed();
+                if(!(tool==Note ? pdf.note(p,value) : pdf.freeText(p,value))) report(pdf.error());
+                else { changed(); if(tool==Note) showComment(pdf.annotationCount()-1); }
             }
         }
     }
@@ -351,13 +370,15 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override {
         if(event->button()!=Qt::LeftButton || tool!=Select || !pdf.loaded()) return;
         int page=pageAt(event->position()); if(page<0) return; activate(page);
-        auto p=pdfPoint(event->position()); int hit=textAnnotationAt(p);
-        if(hit>=0) beginText(p,hit);
+        auto p=pdfPoint(event->position()); int hit=annotationAt(p);
+        if(hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_TEXT) showComment(hit);
+        else if(hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_FREETEXT) beginText(p,hit);
     }
     void keyPressEvent(QKeyEvent* event) override {
         QWidget::keyPressEvent(event);
     }
 private:
+    CommentPopup* commentPopup=nullptr;
     bool draggingText=false,dragCandidate=false;
     QPointF dragStart,dragOffset;
     int annotationAt(QPointF point) const {

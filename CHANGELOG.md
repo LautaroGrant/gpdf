@@ -1,5 +1,12 @@
 # Cambios
 
+## 0.2.2 — 12 de octubre de 2026
+
+- Abrir un PDF desde otra instancia restaura la ventana maximizada o normal sin perder el estado anterior.
+- Botones + y − de la barra: 10 puntos porcentuales; Ctrl+rueda conserva pasos de 25.
+- Comentarios en una ventana sobre la página, accesibles desde Seleccionar y Comentario, con copia de texto y cierre mediante ×, Esc o clic fuera.
+- Desplazamiento automático con indicador de origen y cursores verticales nativos de Windows según dirección.
+
 ## 0.2.1 — 12 de octubre de 2026
 
 - Proyecto, ventana y ejecutable renombrados a GPDF.
