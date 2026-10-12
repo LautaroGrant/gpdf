@@ -218,10 +218,13 @@ void PdfDocument::close() { std::lock_guard apiGuard(pdfiumMutex);
     if (doc_) FPDF_CloseDocument(doc_);
     doc_ = nullptr; bytes_.clear(); dirty_ = false;
 }
-bool PdfDocument::open(const QString& path, const QByteArray& password) { std::lock_guard apiGuard(pdfiumMutex);
+bool PdfDocument::open(const QString& path, const QByteArray& password) {
     QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) return fail(file.errorString());
+    if (!file.open(QIODevice::ReadOnly)) { std::lock_guard apiGuard(pdfiumMutex); return fail(file.errorString()); }
     QByteArray bytes = file.readAll();
+    const auto readError=file.error(); const auto readMessage=file.errorString(); file.close();
+    std::lock_guard apiGuard(pdfiumMutex);
+    if(readError!=QFileDevice::NoError) return fail(readMessage);
     auto next = FPDF_LoadMemDocument64(bytes.constData(), size_t(bytes.size()), password.constData());
     if (!next) return fail(QString("No se pudo abrir el PDF (error %1). Puede requerir una contraseña.").arg(FPDF_GetLastError()));
     // Validate the first page before replacing the current document and its undo history.
@@ -561,14 +564,22 @@ bool PdfDocument::ink(const QVector<QPointF>& points,const QColor& color,double 
     if (!ok) { FPDFPage_RemoveAnnot(page_, annotationCount()-1); return fail("Falló la creación del trazo."); }
     dirty_ = true; recordHistory(); return true;
 }
-bool PdfDocument::saveCopy(const QString& path) { std::lock_guard apiGuard(pdfiumMutex);
+bool PdfDocument::saveCopy(const QString& path) { std::unique_lock apiGuard(pdfiumMutex);
     if (!doc_) return fail("No hay un documento abierto.");
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) return fail(file.errorString());
     Writer writer(file);
     if (!FPDF_SaveAsCopy(doc_, &writer, FPDF_NO_INCREMENTAL)) { file.cancelWriting(); return fail("PDFium no pudo guardar el documento."); }
-    if (!file.commit()) return fail(file.errorString());
-    dirty_ = false; savedHistoryId_=historyPosition_>=0 ? history_[historyPosition_].id : 0; return true;
+    const auto savedRevision=revision_;
+    const auto savedId=historyPosition_>=0 ? history_[historyPosition_].id : 0;
+    // PDFium serialization is finished; flushing and replacing the destination
+    // must not prevent another document from rendering or searching.
+    apiGuard.unlock();
+    const bool committed=file.commit(); const auto message=file.errorString();
+    apiGuard.lock();
+    if(!committed) return fail(message);
+    if(revision_==savedRevision) { dirty_=false; savedHistoryId_=savedId; }
+    return true;
 }
 int PdfDocument::annotationCount() const { std::lock_guard apiGuard(pdfiumMutex); return page_ ? FPDFPage_GetAnnotCount(page_) : 0; }
 QString PdfDocument::annotationContents(int index) const { std::lock_guard apiGuard(pdfiumMutex);
@@ -756,11 +767,18 @@ QVector<PdfDocument::AnnotationEntry> PdfDocument::pageAnnotations(int index) co
     annotationPages_.insert(index,entries); return entries;
 }
 
-bool PdfDocument::saveRecovery(const QString& path) const { std::lock_guard apiGuard(pdfiumMutex);
-    if(!loaded()) return false;
+bool PdfDocument::saveRecovery(const QString& path) const {
+    // QByteArray shares immutable storage: retain a consistent revision while disk I/O
+    // runs without the global PDFium mutex. Edits detach or replace their buffers.
+    QByteArray base,tail;
+    {
+        std::lock_guard apiGuard(pdfiumMutex);
+        if(!loaded()) return false;
+        if(historyPosition_>=0) { const auto& entry=history_[historyPosition_]; base=entry.base; tail=entry.tail; }
+        else { base=snapshot(); if(base.isEmpty()) return false; }
+    }
     QSaveFile file(path); if(!file.open(QIODevice::WriteOnly)) return false;
-    if(historyPosition_>=0) { const auto& entry=history_[historyPosition_]; if(file.write(entry.base)!=entry.base.size() || file.write(entry.tail)!=entry.tail.size()) return false; }
-    else { auto data=snapshot(); if(data.isEmpty() || file.write(data)!=data.size()) return false; }
+    if(file.write(base)!=base.size() || file.write(tail)!=tail.size()) return false;
     return file.commit();
 }
 void PdfDocument::markRecovered() { std::lock_guard apiGuard(pdfiumMutex); savedHistoryId_=0; dirty_=true; }

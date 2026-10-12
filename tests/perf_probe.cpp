@@ -1,5 +1,4 @@
-#define STUDYPDF_NO_MAIN
-#include "../src/main.cpp"
+#include "Window.h"
 #include <QTemporaryDir>
 #include <QElapsedTimer>
 #include <iostream>
