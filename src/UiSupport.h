@@ -1,9 +1,10 @@
 #pragma once
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
 #include <QElapsedTimer>
 #include <QDebug>
 #endif
 #include "PdfDocument.h"
+#include "AppIdentity.h"
 #include "SingleInstance.h"
 #include <QCryptographicHash>
 #include <QFormLayout>
@@ -115,11 +116,11 @@ public:
 };
 #endif
 
-class StudyToolIcon : public QIconEngine {
+class GpdfToolIcon : public QIconEngine {
     int tool;
 public:
-    explicit StudyToolIcon(int value):tool(value) {}
-    QIconEngine* clone() const override { return new StudyToolIcon(tool); }
+    explicit GpdfToolIcon(int value):tool(value) {}
+    QIconEngine* clone() const override { return new GpdfToolIcon(tool); }
     QPixmap pixmap(const QSize& size,QIcon::Mode mode,QIcon::State state) override {
         QPixmap image(size); image.fill(Qt::transparent);
         QPainter painter(&image); paint(&painter,QRect(QPoint(0,0),size),mode,state);
@@ -141,14 +142,14 @@ public:
     }
 };
 
-class StudyCommentDialog : public QInputDialog {
+class GpdfCommentDialog : public QInputDialog {
 public:
-    explicit StudyCommentDialog(QWidget* parent,const QString& title,const QString& contents):QInputDialog(parent) {
+    explicit GpdfCommentDialog(QWidget* parent,const QString& title,const QString& contents):QInputDialog(parent) {
         setWindowTitle(title); setLabelText("Texto (Enter para guardar, Shift+Enter para nueva línea):");
         setOption(QInputDialog::UsePlainTextEditForTextInput); setInputMode(QInputDialog::TextInput); setTextValue(contents);
         qApp->installEventFilter(this);
     }
-    ~StudyCommentDialog() override { qApp->removeEventFilter(this); }
+    ~GpdfCommentDialog() override { qApp->removeEventFilter(this); }
 protected:
     bool eventFilter(QObject* object,QEvent* event) override {
         auto input=qobject_cast<QPlainTextEdit*>(object);
@@ -160,7 +161,7 @@ protected:
     }
 };
 static QString studyMultilineText(QWidget* parent,const QString& title,const QString& contents,bool* accepted) {
-    StudyCommentDialog dialog(parent,title,contents);
+    GpdfCommentDialog dialog(parent,title,contents);
     *accepted=dialog.exec()==QDialog::Accepted;
     return dialog.textValue();
 }

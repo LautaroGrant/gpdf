@@ -2,7 +2,8 @@
 
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
-    app.setApplicationVersion(STUDYPDF_VERSION);
+    app.setApplicationName("GPDF");
+    app.setApplicationVersion(GPDF_VERSION);
     app.setStyle("Fusion");
     installSpanishTranslations();
     app.setFont(QFont("Segoe UI",10));
@@ -11,14 +12,14 @@ int main(int argc,char** argv) {
     QStringList paths;
     for(int i=1;i<arguments.size();++i) { if(arguments[i]=="--snapshot") break; paths.append(QFileInfo(arguments[i]).absoluteFilePath()); }
     QString identity=qEnvironmentVariable("USERPROFILE",QDir::homePath());
-    SingleInstance instance("StudyPDF-"+QString::fromLatin1(QCryptographicHash::hash(identity.toUtf8(),QCryptographicHash::Sha256).toHex().left(20)));
+    SingleInstance instance(QString::fromLatin1(AppIdentity::instancePrefix)+QString::fromLatin1(QCryptographicHash::hash(identity.toUtf8(),QCryptographicHash::Sha256).toHex().left(20)));
 #ifdef Q_OS_WIN
     AllowSetForegroundWindow(ASFW_ANY);
 #endif
     if(!snapshot) {
         auto result=instance.start(paths);
         if(result==SingleInstance::Forwarded) return 0;
-        if(result==SingleInstance::Failed) { QMessageBox::warning(nullptr,"Study PDF","No se pudo comunicar con la instancia abierta. Volvé a intentar abrir el documento."); return 1; }
+        if(result==SingleInstance::Failed) { QMessageBox::warning(nullptr,"GPDF","No se pudo comunicar con la instancia abierta. Volvé a intentar abrir el documento."); return 1; }
     }
     Window window; window.show();
     bool startupReady=false; QStringList pendingLaunches;

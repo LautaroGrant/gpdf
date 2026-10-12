@@ -31,7 +31,7 @@ static void generate(const QString& path,int count,bool scanned) {
             painter.drawImage(QRect(0,0,writer.width(),writer.height()),image);
         } else {
             painter.setFont(QFont("Arial",16));
-            painter.drawText(QRect(20,20,writer.width()-40,writer.height()-40),Qt::TextWordWrap,QString("StudyPDF corpus page %1\nUnicode: Cortázar, investigación.\nA searchable document with many pages.").arg(page+1));
+            painter.drawText(QRect(20,20,writer.width()-40,writer.height()-40),Qt::TextWordWrap,QString("GPDF corpus page %1\nUnicode: Cortázar, investigación.\nA searchable document with many pages.").arg(page+1));
             painter.setPen(QPen(Qt::blue,2)); painter.drawEllipse(QRect(60,140,180,100));
         }
     }
@@ -77,7 +77,7 @@ int main(int argc,char** argv) {
             require(QDir().mkpath(outputRoot),"Cannot create output directory");
         }
         const bool stress=inputs.removeAll("--stress")>0;
-        QTemporaryDir temporary(outputRoot.isEmpty() ? QDir::tempPath()+"/StudyPDF-corpus-XXXXXX" : QDir(outputRoot).filePath("corpus-XXXXXX"));
+        QTemporaryDir temporary(outputRoot.isEmpty() ? QDir::tempPath()+"/GPDF-corpus-XXXXXX" : QDir(outputRoot).filePath("corpus-XXXXXX"));
         require(temporary.isValid(),"No temporary directory");
         if(!outputRoot.isEmpty()) { temporary.setAutoRemove(false); std::cout<<"OUTPUT "<<temporary.path().toStdString()<<'\n'; }
         if(inputs.isEmpty()) {

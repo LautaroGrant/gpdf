@@ -1,10 +1,10 @@
-# StudyPDF 0.2.0
+# GPDF 0.2.1
 
-Lector de PDF para estudiar en Windows x64, construido con C++20, Qt Widgets y PDFium. Estado: beta local funcional.
+GPDF (antes StudyPDF) es un lector de PDF para estudiar en Windows x64, construido con C++20, Qt Widgets y PDFium. Estado: beta local funcional.
 
 ## Ejecutar
 
-La distribución vigente es `dist/StudyPDF-0.2.0/StudyPDF.exe`. La carpeta completa debe mantenerse junto al ejecutable; no hace falta instalar Qt. `build-info.json` identifica versión, commit, estado del código y hashes de los binarios. Las distribuciones anteriores se conservan como referencia.
+La distribución vigente es `dist/GPDF-0.2.1/GPDF.exe`. La carpeta completa debe mantenerse junto al ejecutable; no hace falta instalar Qt. `build-info.json` identifica versión, commit, estado del código y hashes de los binarios. Las distribuciones anteriores se conservan como referencia.
 
 Abrí un PDF desde Inicio o Archivo. Abrir otro archivo agrega una pestaña. Windows permite asociar PDFs mediante «Abrir con». La aplicación reutiliza la instancia abierta.
 
@@ -18,7 +18,7 @@ Abrí un PDF desde Inicio o Archivo. Abrir otro archivo agrega una pestaña. Win
 - Exportación de anotaciones a Markdown, texto o HTML; impresión y vista previa.
 - Interfaz oscura con páginas blancas y atajos personalizables.
 
-Las anotaciones se guardan dentro del PDF. Los marcadores personales y el progreso son locales y se identifican por ruta. Guardar como adopta el nuevo archivo como documento actual.
+Las anotaciones se guardan dentro del PDF. Los marcadores personales y el progreso son locales y se identifican por ruta. El cambio de nombre conserva la ubicación de configuración de StudyPDF para mantener preferencias, marcadores y recuperación. Guardar como adopta el nuevo archivo como documento actual.
 
 ## Atajos predeterminados
 
@@ -42,7 +42,7 @@ En PowerShell, con Python 3.11+ para instalar las herramientas:
 
 ```powershell
 ./scripts/bootstrap.ps1
-./scripts/build.ps1 -Package -PackageName StudyPDF-0.2.0
+./scripts/build.ps1 -Package -PackageName GPDF-0.2.1
 ```
 
 Las dependencias se instalan en el proyecto. La compilación ejecuta tres suites: núcleo/persistencia, interfaz y corpus PDF. Las pruebas de interfaz usan Qt offscreen y necesitan acceso a archivos temporales e IPC local de Windows.
@@ -69,7 +69,8 @@ La compatibilidad de edición con Edge/Acrobat y la impresión física requieren
 El repositorio Git es local, sin remoto configurado. `baseline-0.1` conserva el punto de partida. Fuentes y PDFs sintéticos se versionan; herramientas, compilaciones, paquetes y documentos personales quedan fuera del repositorio.
 
 - `docs/architecture.md`: componentes y decisiones de concurrencia.
-- `docs/validation-0.2.0.md`: resultados y cobertura de la versión.
+- `docs/validation-0.2.1.md`: verificación del cambio de nombre a GPDF.
+- `docs/validation-0.2.0.md`: cobertura y mediciones de la consolidación anterior.
 - `CHANGELOG.md`: cambios por versión.
 - `docs/development-history.md`: notas históricas anteriores.
 

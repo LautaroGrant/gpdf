@@ -1,4 +1,4 @@
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
 #include <QElapsedTimer>
 #include <QDebug>
 #endif
@@ -122,13 +122,13 @@ void PdfDocument::resetHistory() { std::lock_guard apiGuard(pdfiumMutex);
     savedHistoryId_=dirty_ ? 0 : revision_;
 }
 void PdfDocument::recordHistory() { std::lock_guard apiGuard(pdfiumMutex);
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
     QElapsedTimer profile; profile.start();
 #endif
     revision_=++nextRevision; annotationsCached_=false; annotationPages_.remove(index_); searchIndex_->remove(index_); hoverRegions_.remove(index_);
     auto entry=captureHistory(); if(entry.base.isEmpty() && entry.tail.isEmpty()) return;
     
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
     qInfo()<<"PERF history_ms"<<profile.nsecsElapsed()/1000000.0;
 #endif
     history_.resize(historyPosition_+1); history_.append(entry); historyPosition_=history_.size()-1;
@@ -426,11 +426,11 @@ QString PdfDocument::selectionText(int first, int last) const { std::lock_guard 
     return length > 0 ? QString::fromUtf16(reinterpret_cast<const char16_t*>(buffer.data()), length-1) : QString();
 }
 bool PdfDocument::highlight(int first, int last,const QColor& color) {
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
     QElapsedTimer profile; profile.start();
 #endif
     std::lock_guard apiGuard(pdfiumMutex);
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
     qInfo()<<"PERF highlight_lock_ms"<<profile.nsecsElapsed()/1000000.0;
 #endif
     if(!canAddAnnotations()) return fail("El documento no permite agregar anotaciones.");
@@ -467,7 +467,7 @@ bool PdfDocument::highlight(int first, int last,const QColor& color) {
     FPDFPage_CloseAnnot(annot);
     if (!ok) { FPDFPage_RemoveAnnot(page_, annotationCount()-1); return fail("Falló la creación del resaltado."); }
     dirty_ = true; recordHistory();
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
     qInfo()<<"PERF highlight_total_ms"<<profile.nsecsElapsed()/1000000.0;
 #endif
     return true;

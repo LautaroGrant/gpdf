@@ -1,5 +1,11 @@
 # Cambios
 
+## 0.2.1 — 12 de octubre de 2026
+
+- Proyecto, ventana y ejecutable renombrados a GPDF.
+- Configuración, recuperación, instancia única y metadatos de anotaciones anteriores conservan compatibilidad con StudyPDF.
+- README y empaquetado actualizados; repositorio exclusivamente local.
+
 ## 0.2.0 — 12 de octubre de 2026
 
 - Repositorio Git local y punto de partida conservado; sin remoto ni push.

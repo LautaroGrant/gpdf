@@ -35,7 +35,7 @@ int main(int argc,char** argv) {
     }
     try {
         auto require=[](bool ok,const char* message){ if(!ok) throw std::runtime_error(message); };
-        QString instanceKey="StudyPDF-test-"+QString::number(QCoreApplication::applicationPid());
+        QString instanceKey="GPDF-test-"+QString::number(QCoreApplication::applicationPid());
         SingleInstance instance(instanceKey);
         require(instance.start({})==SingleInstance::Primary,"single instance becomes owner");
         QStringList delivered;
@@ -60,7 +60,7 @@ int main(int argc,char** argv) {
             require(pdf.saveCopy(fixture),"save fixture");
             if(!output.isEmpty()) require(pdf.saveCopy(output+"/views-sample.pdf"),"save view demonstration");
         }
-        { QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); settings.setValue("shortcuts/highlightAction","Ctrl+H"); settings.setValue("shortcuts/saveFileAction","Ctrl+S"); settings.setValue("shortcuts/saveAsFileAction","Ctrl+Shift+S"); settings.setValue("shortcuts/goPage","Ctrl+G"); settings.setValue("shortcuts/editSelectedAnnotationAction","F2"); }
+        { QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.setValue("shortcuts/highlightAction","Ctrl+H"); settings.setValue("shortcuts/saveFileAction","Ctrl+S"); settings.setValue("shortcuts/saveAsFileAction","Ctrl+Shift+S"); settings.setValue("shortcuts/goPage","Ctrl+G"); settings.setValue("shortcuts/editSelectedAnnotationAction","F2"); }
         Window window;
         window.show();
         for(auto button:window.findChildren<QPushButton*>()) require(button->text()!="Aplicar a la anotación seleccionada","drawing menus omit apply-to-selected action");
@@ -445,7 +445,7 @@ int main(int argc,char** argv) {
         auto recent=window.findChild<QAction*>("recentFile0");
         require(recent && recent->isVisible() && recent->isEnabled(),"opened file available in recent menu");
         window.findChild<QAction*>("closeDocumentAction")->trigger();
-        require(!view->pdf.loaded() && results->count()==0 && window.windowTitle()=="Study PDF","close document restores start screen");
+        require(!view->pdf.loaded() && results->count()==0 && window.windowTitle()=="GPDF","close document restores start screen");
         require(!window.findChild<QAction*>("printAction")->isEnabled(),"print disabled without a document");
         recent->trigger(); require(view->pdf.loaded() && window.windowTitle().contains("ui.pdf"),"recent menu reopens saved document");
         require(results->item(0)==nullptr,"new document clears results");
@@ -746,7 +746,7 @@ int main(int argc,char** argv) {
         {
             Window geometryWindow; geometryWindow.show(); geometryWindow.resize(1100,720); app.processEvents(); QSize savedWindowSize=geometryWindow.size(); geometryWindow.close();
             Window restoredWindow; restoredWindow.restoreWindow(); app.processEvents(); require(restoredWindow.size()==savedWindowSize,"window dimensions restored");
-            QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); settings.setValue("window/state",int(Qt::WindowMaximized)); restoredWindow.restoreWindow(); require(restoredWindow.isMaximized(),"maximized state restored");
+            QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.setValue("window/state",int(Qt::WindowMaximized)); restoredWindow.restoreWindow(); require(restoredWindow.isMaximized(),"maximized state restored");
             settings.setValue("window/state",int(Qt::WindowMinimized)); restoredWindow.restoreWindow(); require(restoredWindow.isMinimized(),"minimized state restored");
         }
         {
@@ -816,7 +816,7 @@ int main(int argc,char** argv) {
             Window later; later.loadPath(readingPdf); PageView* reopened=nullptr; for(auto widget:later.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) reopened=page;
             require(reopened->pdf.pageIndex()==2 && qFuzzyCompare(reopened->scale,1.75) && later.findChild<QListWidget*>("personalBookmarks")->count()==1,"reading state and personal bookmarks survive new window");
         }
-        QSettings sessionSettings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF");
+        QSettings sessionSettings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
         QString sessionRoot=QFileInfo(sessionSettings.fileName()).absolutePath()+"/recovery";
         auto sessionEntry=[](QString path) { return QJsonObject{{"path",path},{"id",QUuid::createUuid().toString(QUuid::WithoutBraces)}}; };
         auto writeManifest=[&](QJsonArray entries,int active,QString activeId=QString()) {

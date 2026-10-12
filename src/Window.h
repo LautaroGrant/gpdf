@@ -7,7 +7,7 @@ class Window : public QMainWindow {
 public:
     Window() {
         installSpanishTranslations();
-        setWindowTitle("Study PDF"); resize(1280,850);
+        setWindowTitle("GPDF"); resize(1280,850);
         view = new PageView(pdf);
         scroll = new QScrollArea;
         scroll->setWidget(view); scroll->setAlignment(Qt::AlignHCenter);
@@ -144,13 +144,13 @@ public:
         const QStringList labels{"Seleccionar","Comentario","Texto","Lápiz"};
         for(int i=0;i<labels.size();++i) {
             auto a=editingAction(labels[i],[this,i]{ if(!view->finishText()) return; view->tool=PageView::Tool(i); view->resetSelection(); view->update(); statusBar()->showMessage(i==0 ? "Arrastrá sobre el texto y luego presioná Resaltar." : "Hacé clic en la página o arrastrá para dibujar."); });
-            a->setObjectName(QString("editTool%1").arg(i)); a->setIcon(QIcon(new StudyToolIcon(i))); a->setShortcut(QKeySequence(Qt::Key_F1+i)); addAction(a);
+            a->setObjectName(QString("editTool%1").arg(i)); a->setIcon(QIcon(new GpdfToolIcon(i))); a->setShortcut(QKeySequence(Qt::Key_F1+i)); addAction(a);
             a->setCheckable(true); group->addAction(a); if(i==0) a->setChecked(true);
         }
         auto eraser=new QAction("Borrador de resaltados y trazos",this); eraser->setObjectName("editTool4"); eraser->setCheckable(true); group->addAction(eraser); addAction(eraser);
         connect(eraser,&QAction::triggered,this,[this]{ if(!view->finishText()) return; view->tool=PageView::Eraser; view->resetSelection(); view->setCursor(Qt::CrossCursor); });
         auto highlightAction=editingAction("Resaltar",[this]{ std::lock_guard guard(PdfDocument::apiMutex()); if(!pdf.loaded() || view->first<0 || view->last<0) return; if(!pdf.highlight(view->first,view->last,view->highlightColor)) error(pdf.error()); else { view->resetSelection(); refresh(); } });
-        highlightAction->setObjectName("highlightAction"); highlightAction->setIcon(QIcon(new StudyToolIcon(4))); addAction(highlightAction);
+        highlightAction->setObjectName("highlightAction"); highlightAction->setIcon(QIcon(new GpdfToolIcon(4))); addAction(highlightAction);
         togglePanel=new QAction("Anotaciones",this);
         addAction(togglePanel);
         auto annotationsToggle=new QToolButton; annotationsToggle->setDefaultAction(togglePanel);
@@ -263,7 +263,7 @@ public:
     }
 
     void restoreWindow() {
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF");
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
         auto geometry=settings.value("window/geometry").toByteArray();
         if(!geometry.isEmpty()) restoreGeometry(geometry);
         QSize savedSize=settings.value("window/size").toSize(); if(savedSize.isValid()) resize(savedSize);
@@ -287,7 +287,7 @@ public:
             int oldSize=int(documents.size()); openPath(readPath);
             if(int(documents.size())==oldSize) { preservePending(); continue; }
             auto& doc=*documents.back(); doc.id=item["id"].toString(doc.id); if(QUuid(doc.id).isNull()) doc.id=QUuid::createUuid().toString(QUuid::WithoutBraces);
-            source=path; doc.path=path; doc.personalMarks=item["marks"].toArray(); if(doc.personalMarks.isEmpty()) { QSettings reading(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); doc.personalMarks=QJsonDocument::fromJson(reading.value(readingKey(path)).toByteArray()).object()["marks"].toArray(); } if(useBackup) pdf.markRecovered();
+            source=path; doc.path=path; doc.personalMarks=item["marks"].toArray(); if(doc.personalMarks.isEmpty()) { QSettings reading(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); doc.personalMarks=QJsonDocument::fromJson(reading.value(readingKey(path)).toByteArray()).object()["marks"].toArray(); } if(useBackup) pdf.markRecovered();
             doc.mode=PageView::Mode(std::clamp(item["mode"].toInt(),0,2)); doc.fit=PageView::Fit(std::clamp(item["fit"].toInt(),0,3)); doc.scale=std::clamp(item["scale"].toDouble(1.25),0.5,3.0); doc.rotation=std::clamp(item["rotation"].toInt(),0,3); doc.vertical=std::max(0,item["vertical"].toInt()); doc.horizontal=std::max(0,item["horizontal"].toInt()); doc.scope=std::clamp(item["scope"].toInt(),0,1); doc.type=std::clamp(item["type"].toInt(),0,5); doc.query=item["query"].toString(); doc.searchVisible=item["searchVisible"].toBool(); doc.annotationsVisible=item["annotationsVisible"].toBool();
             pdf.setPage(std::clamp(item["page"].toInt(),0,std::max(0,pdf.pageCount()-1)));
             view->mode=doc.mode; view->fit=doc.fit; view->scale=doc.scale; view->rotation=doc.rotation;
@@ -431,7 +431,7 @@ protected:
         int original=activeDocument;
         for(int i=0;i<int(documents.size());++i) { if(!switchDocument(i) || !confirmDiscard()) { for(auto& doc:documents) doc->discardOnExit=false; switchDocument(original); event->ignore(); return; } }
         switchDocument(original); saveSession(true);
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF");
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
         settings.setValue("window/geometry",isFullScreen() ? fullscreenRestoreSavedGeometry : saveGeometry());
         settings.setValue("window/size",isFullScreen() ? fullscreenRestoreGeometry.size() : (isMaximized() || isMinimized() ? normalGeometry().size() : size()));
         settings.setValue("window/state",int((isFullScreen() ? fullscreenRestoreState : windowState()) & (Qt::WindowMinimized|Qt::WindowMaximized)));
@@ -502,7 +502,7 @@ private:
     bool restoringSession=false;
     QJsonArray pendingRecoveryItems;
     QTimer* checkpointTimer=nullptr;
-    QString sessionDirectory() const { QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); return QFileInfo(settings.fileName()).absolutePath()+"/recovery"; }
+    QString sessionDirectory() const { QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); return QFileInfo(settings.fileName()).absolutePath()+"/recovery"; }
     void captureDocument() {
         if(activeDocument<0) return;
         auto& doc=*documents[activeDocument]; doc.path=source; doc.query=searchInput->text(); doc.mode=view->mode; doc.fit=view->fit; doc.scale=view->scale; doc.rotation=view->rotation;
@@ -516,13 +516,13 @@ private:
     }
     void persistReading() {
         if(restoringSession || activeDocument<0 || source.isEmpty() || !pdf.loaded()) return;
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); auto& doc=*documents[activeDocument];
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); auto& doc=*documents[activeDocument];
         QJsonObject state={{"page",pdf.pageIndex()},{"mode",int(view->mode)},{"fit",int(view->fit)},{"scale",view->scale},{"rotation",view->rotation},{"vertical",scroll->verticalScrollBar()->value()},{"horizontal",scroll->horizontalScrollBar()->value()},{"marks",doc.personalMarks}};
         settings.setValue(readingKey(source),QJsonDocument(state).toJson(QJsonDocument::Compact));
     }
     void restoreReading() {
         if(restoringSession || activeDocument<0) return;
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); auto state=QJsonDocument::fromJson(settings.value(readingKey(source)).toByteArray()).object();
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); auto state=QJsonDocument::fromJson(settings.value(readingKey(source)).toByteArray()).object();
         if(state.isEmpty()) return;
         bool previous=updatingView; updatingView=true;
         documents[activeDocument]->personalMarks=state["marks"].toArray();
@@ -579,7 +579,7 @@ private:
         fileMenu->addSeparator();
         action(fileMenu,"Cerrar documento","closeDocumentAction",[this]{ closeDocument(); },QKeySequence("Ctrl+W"));
         action(fileMenu,"Salir","exitAction",[this]{ close(); },QKeySequence("Ctrl+Q"));
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF");
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
         recentFiles=settings.value("recentFiles").toStringList(); recentFiles=recentFiles.mid(0,10); updateRecentActions(); updateFileActions();
     }
     void updateRecentActions() {
@@ -596,7 +596,7 @@ private:
         QString absolute=QFileInfo(path).absoluteFilePath();
         for(int i=recentFiles.size()-1;i>=0;--i) if(recentFiles[i].compare(absolute,Qt::CaseInsensitive)==0) recentFiles.removeAt(i);
         recentFiles.prepend(absolute); recentFiles=recentFiles.mid(0,10);
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); settings.setValue("recentFiles",recentFiles);
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.setValue("recentFiles",recentFiles);
         updateRecentActions(); installFileMenu();
     }
     void updateFileActions() {
@@ -839,12 +839,12 @@ private:
         auto widgetAction=new QWidgetAction(menu); widgetAction->setDefaultWidget(panel); menu->addAction(widgetAction);
         auto update=[this,pencil,colors,secondary,opacity,width]{
             QColor color=colors->currentData().value<QColor>(); color.setAlpha(int(std::lround(opacity->value()*255.0/100)));
-            QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF");
+            QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
             if(pencil) { view->penColor=color; view->penWidth=width->value(); settings.setValue("drawing/penColor",color); settings.setValue("drawing/penWidth",view->penWidth); }
             else { view->highlightColor=color; view->secondaryHighlightColor=secondary->currentData().value<QColor>(); view->secondaryHighlightColor.setAlpha(color.alpha()); settings.setValue("drawing/highlightColor",color); settings.setValue("drawing/secondaryHighlightColor",view->secondaryHighlightColor); settings.setValue("drawing/highlightOpacity",opacity->value()); }
             view->update();
         };
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF");
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
         if(!pencil && !settings.value("drawing/highlightOpacity60Migrated",false).toBool()) {
             if(settings.value("drawing/highlightOpacity",40).toInt()==40) settings.setValue("drawing/highlightOpacity",60);
             settings.setValue("drawing/highlightOpacity60Migrated",true);
@@ -885,7 +885,7 @@ private:
             "QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled, QPushButton:disabled, QToolButton:disabled, QComboBox:disabled, QAbstractSpinBox:disabled, QMenu::item:disabled { color: #aeb8c7; }"
             : QString());
         QApplication::setPalette(palette); setPalette(palette); scroll->setStyleSheet(enabled ? "QScrollArea { background: #20252d; border: 0; }" : "QScrollArea { background: #e9edf2; border: 0; }"); view->setDarkMode(enabled); updateToolbarLayout();
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); settings.setValue("reading/darkMode",enabled);
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.setValue("reading/darkMode",enabled);
     }
     void createReadingActions() {
         auto action=[this](QMenu* menu,QList<QAction*>& list,const QString& title,const QString& name,auto handler,const QString& shortcut=QString()) { auto item=menu->addAction(title); item->setObjectName(name); item->setShortcut(QKeySequence(shortcut)); addAction(item); list.append(item); connect(item,&QAction::triggered,this,handler); return item; };
@@ -914,7 +914,7 @@ private:
         updateToolbarLayout();
         action(fileMenu,fileActions,"Exportar anotaciones…","exportAnnotationsAction",[this]{ if(!view->finishText() || !pdf.loaded()) return; QString selectedFilter; auto path=QFileDialog::getSaveFileName(this,"Exportar anotaciones",QFileInfo(source).completeBaseName()+"-anotaciones.md","Markdown (*.md);;Texto (*.txt);;HTML (*.html)",&selectedFilter,fileDialogOptions()); if(!path.isEmpty() && QFileInfo(path).suffix().isEmpty()) path+=selectedFilter.startsWith("HTML") ? ".html" : selectedFilter.startsWith("Texto") ? ".txt" : ".md"; if(!path.isEmpty() && !exportAnnotationsTo(path)) error("No se pudieron exportar las anotaciones."); });
         auto exportAction=findChild<QAction*>("exportAnnotationsAction"); fileMenu->removeAction(exportAction); fileMenu->insertAction(findChild<QAction*>("propertiesAction"),exportAction);
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); dark->setChecked(settings.value("reading/darkMode",false).toBool()); applyDarkMode(dark->isChecked());
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); dark->setChecked(settings.value("reading/darkMode",false).toBool()); applyDarkMode(dark->isChecked());
     }
     void jumpTo(int target) {
         if(!pdf.loaded() || target<0 || target>=pdf.pageCount() || !view->finishText()) return;
@@ -980,7 +980,7 @@ private:
         auto enter=extra("Buscar / resultado siguiente (en Búsqueda)","searchEnterAction","Return",[this]{ searchEnter(); }); removeAction(enter);
         shortcutsMenu=new QMenu("&Atajos",this);
         auto configure=extra("Ver y modificar atajos…","configureShortcutsAction",{},[this]{ configureShortcuts(); }); shortcutsMenu->addAction(configure); shortcutMenuActions.append(configure);
-        QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); settings.beginGroup("shortcuts");
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.beginGroup("shortcuts");
         if(!settings.value("iconToolShortcutsMigrated",false).toBool()) {
             const QHash<QString,QString> requested={{"editTool0","F1"},{"editTool1","F2"},{"editTool2","F3"},{"editTool3","F4"},{"highlightAction","Ctrl+S"},{"secondaryHighlightAction","Ctrl+Shift+S"},{"saveFileAction","Ctrl+G"},{"saveAsFileAction","Ctrl+Shift+G"},{"goPage","Ctrl+I"}};
             for(auto i=requested.cbegin();i!=requested.cend();++i) settings.setValue(i.key(),i.value());
@@ -1029,7 +1029,7 @@ private:
                     if((a=="confirmTextAction" && b=="searchEnterAction") || (a=="searchEnterAction" && b=="confirmTextAction")) continue;
                     QMessageBox::warning(&dialog,"Atajo repetido",QString("%1 ya está asignado a %2.").arg(key.toString(QKeySequence::NativeText),shortcutActions[j]->text())); return; }
             }
-            QSettings settings(QSettings::IniFormat,QSettings::UserScope,"StudyPDF","StudyPDF"); settings.beginGroup("shortcuts");
+            QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.beginGroup("shortcuts");
             for(int i=0;i<editors.size();++i) { auto action=shortcutActions[i]; action->setShortcut(editors[i]->keySequence()); settings.setValue(action->objectName(),action->shortcut().toString(QKeySequence::PortableText)); }
             updateToolTips(); installFileMenu(); dialog.accept();
         });
@@ -1174,7 +1174,7 @@ private:
     quint64 searchRevision=0;
     bool updatingView=false;
     QFileDialog::Options fileDialogOptions() const { return view->darkMode ? QFileDialog::DontUseNativeDialog : QFileDialog::Options(); }
-    void error(QString value) { QMessageBox::warning(this,"Study PDF",value); }
+    void error(QString value) { QMessageBox::warning(this,"GPDF",value); }
     void resetSearch() {
         searchRevision=0;
         ++searchGeneration; searchBusy=false;
@@ -1440,16 +1440,16 @@ private:
     void refresh(int selected=-1) {
         std::lock_guard guard(PdfDocument::apiMutex());
         bool previous=updatingView; updatingView=true;
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
         QElapsedTimer profile; profile.start();
 #endif
         view->refresh();
         if(searchRevision && searchRevision!=pdf.revision() && !searchInput->text().trimmed().isEmpty()) startSearch();
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
         qInfo()<<"PERF refresh_view_ms"<<profile.nsecsElapsed()/1000000.0; profile.restart();
 #endif
         refreshPanel(selected);
-#ifdef STUDYPDF_PERF_PROBE
+#ifdef GPDF_PERF_PROBE
         qInfo()<<"PERF refresh_panel_ms"<<profile.nsecsElapsed()/1000000.0;
 #endif
         updatingView=previous;
@@ -1518,6 +1518,6 @@ private:
         selectAnnotation(annotations->currentRow());
         updateFileActions(); updateEditActions(); syncViewActions();
         updateDocumentTabs();
-        setWindowTitle(pdf.loaded() ? QString("%1%2 — Study PDF").arg(source.isEmpty() ? "Sin título" : QFileInfo(source).fileName(),pdf.dirty() ? " *" : "") : "Study PDF");
+        setWindowTitle(pdf.loaded() ? QString("%1%2 — GPDF").arg(source.isEmpty() ? "Sin título" : QFileInfo(source).fileName(),pdf.dirty() ? " *" : "") : "GPDF");
     }
 };

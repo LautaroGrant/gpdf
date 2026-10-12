@@ -9,8 +9,8 @@ public:
     }
 };
 void installSpanishTranslations() {
-    if(qApp->findChild<QTranslator*>("studySpanishTranslator")) return;
-    auto translator=new QTranslator(qApp); translator->setObjectName("studySpanishTranslator");
+    if(qApp->findChild<QTranslator*>("gpdfSpanishTranslator")) return;
+    auto translator=new QTranslator(qApp); translator->setObjectName("gpdfSpanishTranslator");
     if(translator->load(":/translations/qtbase_es.qm")) qApp->installTranslator(translator);
     auto fallback=new SpanishUiFallback(qApp); qApp->installTranslator(fallback);
 }

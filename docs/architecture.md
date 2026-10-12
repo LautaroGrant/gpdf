@@ -1,12 +1,13 @@
 # Arquitectura
 
+- `AppIdentity.h`: identidad heredada de almacenamiento e IPC para conservar los datos anteriores al renombrado.
 - `main.cpp`: configuración y arranque, instancia única, argumentos y restauración inicial.
 - `Window.h`: coordinación de documentos, acciones, búsqueda, sesión y paneles.
 - `PageView.h`: geometría, interacción con páginas, selección, texto y cachés de renderizado.
 - `UiSupport.h`: controles auxiliares, delegado de búsqueda, iconos y soporte nativo de Windows.
 - `SessionStore`: lectura, guardado atómico del manifiesto y limpieza posterior de respaldos.
 - `AnnotationExport`: formato y escritura de resúmenes, separado de la validación de destinos de la ventana.
-- `Translations.cpp`: instalación de traducciones, compilada en study_ui.
+- `Translations.cpp`: instalación de traducciones, compilada en gpdf_ui.
 - `PdfDocument`: acceso a PDFium, persistencia, historial y cachés de texto/anotaciones.
 - `SingleInstance`: elección de instancia y transmisión de rutas por IPC local.
 
