@@ -1,0 +1,6 @@
+/.tools/
+/third_party/pdfium/
+/third_party/pdfium.tgz
+/build*/
+/dist/
+/aqtinstall.log
