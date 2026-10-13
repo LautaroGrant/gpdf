@@ -1,4 +1,5 @@
 #include "Window.h"
+#include "UiFont.h"
 #include <QTemporaryDir>
 #include <QProcess>
 #include <QDir>
@@ -28,7 +29,8 @@ public:
 #endif
 
 int main(int argc,char** argv) {
-    QApplication app(argc,argv); app.setStyle("Fusion");
+    configureUiFontBackend();
+    QApplication app(argc,argv); app.setStyle("Fusion"); app.setFont(gpdfUiFont());
     if(app.arguments().size()>=3 && app.arguments()[1]=="--instance-client") {
         SingleInstance client(app.arguments()[2]);
         return client.start(app.arguments().mid(3))==SingleInstance::Forwarded ? 0 : 2;
@@ -109,7 +111,7 @@ int main(int argc,char** argv) {
         {
             QDialogButtonBox translated(QDialogButtonBox::Save|QDialogButtonBox::Cancel|QDialogButtonBox::RestoreDefaults);
             require(translated.button(QDialogButtonBox::Save)->text().remove('&')=="Guardar" && translated.button(QDialogButtonBox::Cancel)->text().remove('&')=="Cancelar","standard Qt buttons translated into Spanish");
-            QKeySequenceEdit shortcut; require(shortcut.findChild<QLineEdit*>()->placeholderText()=="Presioná un atajo","shortcut placeholder translated into Spanish");
+            QKeySequenceEdit shortcut; require(shortcut.findChild<QLineEdit*>()->placeholderText()=="Presionar un atajo","shortcut placeholder translated into neutral Spanish");
         }
         window.loadPath(fixture);
         app.processEvents();
@@ -256,7 +258,7 @@ int main(int argc,char** argv) {
         auto inlineInput=view->findChild<QTextEdit*>("inlineTextInput");
         auto inlineSize=view->findChild<QSpinBox*>("inlineTextSize");
         require(inlineInput && inlineSize && !QApplication::activeModalWidget(),"text editor opens on page without modal dialog");
-        require(inlineInput->placeholderText()=="Escribí aquí…","inline text placeholder omits keyboard instructions");
+        require(inlineInput->placeholderText()=="Escribir aquí…","inline text placeholder omits keyboard instructions");
         require(view->textStyle.family=="Arial" && view->textStyle.color==Qt::black,"Arial and black are defaults");
         inlineInput->setPlainText("Texto directo con acentos: acción"); inlineSize->setValue(22);
         for(auto a:view->findChildren<QAction*>()) if(a->text()=="Azul") a->trigger();
@@ -285,7 +287,7 @@ int main(int argc,char** argv) {
         for(auto editor:view->findChildren<QWidget*>("inlineTextEditor")) require(!editor->isVisible(),"empty editor closes without replacement");
         auto center=window.findChild<QToolBar*>("centerTools");
         auto editing=window.findChild<QToolBar*>("editingTools");
-        require(center && editing && editing->actions().size()==5,"five annotation tools in left group");
+        require(center && editing && editing->actions().size()==6,"six annotation tools including underline in left group");
         require(center->widgetForAction(center->actions()[0])==mode,"view comes first in center group");
         require(center->actions()[2]->text()=="‹" && center->actions()[4]->text()=="›" && center->actions()[6]->text()=="−","pages precede zoom in center group");
         require(view->finishText(),"close pending editor");
@@ -487,7 +489,7 @@ int main(int argc,char** argv) {
         QApplication::sendEvent(view,&middle);
         require(autoTimer->isActive() && QApplication::overrideCursor(),"middle click starts scrolling cursor");
         auto anchor=window.findChild<QLabel*>("autoScrollAnchor");
-        require(anchor && anchor->isVisible(),"autoscroll keeps an anchor indicator on the page");
+        require(!anchor,"autoscroll does not create a fixed indicator on the page");
 #ifdef Q_OS_WIN
         require(NativeScrollCursor::handle(NativeScrollCursor::Neutral) && NativeScrollCursor::handle(NativeScrollCursor::Up) && NativeScrollCursor::handle(NativeScrollCursor::Down),"Windows supplies all three native vertical scroll cursors");
         require(QApplication::overrideCursor()->pixmap().cacheKey()==NativeScrollCursor::cursor(NativeScrollCursor::Neutral).pixmap().cacheKey(),"autoscroll starts with native neutral arrows");
@@ -513,7 +515,7 @@ int main(int argc,char** argv) {
         require(scrollArea->verticalScrollBar()->value()-before>50,"autoscroll accelerates at greater distance");
 
         QKeyEvent escapeScroll(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier); QApplication::sendEvent(view,&escapeScroll);
-        require(!autoTimer->isActive() && !QApplication::overrideCursor() && !anchor->isVisible(),"Escape restores cursor and removes anchor");
+        require(!autoTimer->isActive() && !QApplication::overrideCursor(),"Escape restores cursor");
         QApplication::sendEvent(view,&middle); QApplication::sendEvent(view,&middle);
         require(!autoTimer->isActive(),"another middle click stops scrolling");
         QMouseEvent middleDouble(QEvent::MouseButtonDblClick,local,global,Qt::MiddleButton,Qt::MiddleButton,Qt::NoModifier);
@@ -567,7 +569,7 @@ int main(int argc,char** argv) {
         window.findChild<QAction*>("goBack")->trigger(); require(view->pdf.pageIndex()==0,"navigation back");
         window.findChild<QAction*>("goForward")->trigger(); require(view->pdf.pageIndex()==1,"navigation forward");
         bool propertiesShown=false;
-        QTimer::singleShot(0,[&]{ for(auto widget:QApplication::topLevelWidgets()) if(widget->objectName()=="propertiesDialog") { auto dialog=qobject_cast<QDialog*>(widget); propertiesShown=dialog->findChildren<QLineEdit*>().size()>=15; dialog->accept(); } });
+        QTimer::singleShot(0,[&]{ for(auto widget:QApplication::topLevelWidgets()) if(widget->objectName()=="propertiesDialog") { auto dialog=qobject_cast<QDialog*>(widget); propertiesShown=dialog->findChildren<QLineEdit*>().size()>=15; if(!output.isEmpty()) dialog->grab().save(output+"/light-properties.png"); dialog->accept(); } });
         window.findChild<QAction*>("propertiesAction")->trigger(); require(propertiesShown,"file properties show metadata and file details");
         bool shortcutsShown=false;
         QTimer::singleShot(0,[&]{ for(auto widget:QApplication::topLevelWidgets()) if(widget->objectName()=="shortcutsDialog") {
@@ -766,7 +768,7 @@ int main(int argc,char** argv) {
             Window geometryWindow; geometryWindow.show(); geometryWindow.resize(1100,720); app.processEvents(); QSize savedWindowSize=geometryWindow.size(); geometryWindow.close();
             Window restoredWindow; restoredWindow.restoreWindow(); app.processEvents(); require(restoredWindow.size()==savedWindowSize,"window dimensions restored");
             QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.setValue("window/state",int(Qt::WindowMaximized)); restoredWindow.restoreWindow(); require(restoredWindow.isMaximized(),"maximized state restored");
-            settings.setValue("window/state",int(Qt::WindowMinimized)); restoredWindow.restoreWindow(); require(restoredWindow.isMinimized(),"minimized state restored");
+            settings.setValue("window/state",int(Qt::WindowMinimized)); restoredWindow.restoreWindow(); require(!restoredWindow.isMinimized(),"startup never restores a minimized window");
         }
         {
             Window exporter; exporter.loadPath(fixture); exporter.openDocument(second);
@@ -835,6 +837,9 @@ int main(int argc,char** argv) {
             Window later; later.loadPath(readingPdf); PageView* reopened=nullptr; for(auto widget:later.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) reopened=page;
             require(reopened->pdf.pageIndex()==2 && qFuzzyCompare(reopened->scale,1.75) && later.findChild<QListWidget*>("personalBookmarks")->count()==1,"reading state and personal bookmarks survive new window");
         }
+        // The original fixture remains alive. Its checkpoint must not overwrite
+        // the independent recovery fixtures during their nested password dialogs.
+        window.findChild<QTimer*>("checkpointTimer")->stop();
         QSettings sessionSettings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
         QString sessionRoot=QFileInfo(sessionSettings.fileName()).absolutePath()+"/recovery";
         auto sessionEntry=[](QString path) { return QJsonObject{{"path",path},{"id",QUuid::createUuid().toString(QUuid::WithoutBraces)}}; };
@@ -1036,6 +1041,48 @@ int main(int argc,char** argv) {
             point=tabs->tabRect(0).center(); QMouseEvent dirtyDown(QEvent::MouseButtonPress,point,tabs->mapToGlobal(point),Qt::MiddleButton,Qt::MiddleButton,Qt::NoModifier); QApplication::sendEvent(tabs,&dirtyDown);
             QMouseEvent dirtyUp(QEvent::MouseButtonRelease,point,tabs->mapToGlobal(point),Qt::MiddleButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(tabs,&dirtyUp); dismiss.stop();
             require(prompted && tabs->count()==2 && canvas->pdf.dirty(),"Cancel retains unsaved tab after middle close");
+        }
+        {
+            PdfDocument fixture; require(fixture.createSample(2,"Neutral markup example"),"underline UI fixture"); QString path=directory.path()+"/underline-ui.pdf"; require(fixture.saveCopy(path),"save underline UI fixture");
+            Window reader; reader.openDocument(path); reader.show(); app.processEvents();
+            PageView* canvas=nullptr; for(auto widget:reader.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) canvas=page;
+            auto tools=reader.findChild<QToolBar*>("editingTools"); auto underline=reader.findChild<QAction*>("underlineAction"); auto highlight=reader.findChild<QAction*>("highlightAction");
+            require(tools->actions().indexOf(underline)==tools->actions().indexOf(highlight)+1,"underline follows highlight in toolbar");
+            auto colors=reader.findChild<QComboBox*>("underlineColor"); auto width=reader.findChild<QDoubleSpinBox*>("underlineWidth");
+            require(colors && width,"underline has color and width controls"); colors->setCurrentIndex(2); width->setValue(4);
+            auto indicator=[&](QAction* action,QColor color){ auto image=action->icon().pixmap(24,24).toImage(); int pixels=0; for(int y=21;y<image.height();++y) for(int x=0;x<image.width();++x) { auto actual=image.pixelColor(x,y); if(actual.alpha()>150 && std::abs(actual.red()-color.red())<5 && std::abs(actual.green()-color.green())<5 && std::abs(actual.blue()-color.blue())<5) ++pixels; } return pixels>10; };
+            require(indicator(underline,colors->currentData().value<QColor>()),"underline icon shows selected color");
+            for(const auto& pair:QList<QPair<QString,QString>>{{"highlightColor","highlightAction"},{"penColor","editTool3"}}) { auto combo=reader.findChild<QComboBox*>(pair.first); combo->setCurrentIndex(3); require(indicator(reader.findChild<QAction*>(pair.second),combo->currentData().value<QColor>()),"drawing icon follows selected color"); }
+            canvas->first=0; canvas->last=6; underline->trigger();
+            require(canvas->pdf.annotationType(0)==FPDF_ANNOT_UNDERLINE && canvas->pdf.copyAnnotation(0).strokeWidth==4 && canvas->pdf.annotationColor(0).rgb()==QColor("#cc2244").rgb(),"toolbar creates underline with selected settings");
+            reader.findChild<QAction*>("toggleAnnotations")->setChecked(true); reader.findChild<QComboBox*>("annotationTypeFilter")->setCurrentIndex(6); app.processEvents();
+            auto list=reader.findChild<QListWidget*>("annotationList"); require(list->count()==1 && list->item(0)->data(Qt::UserRole+2).toString().startsWith("<b>Página 1 · Subrayado</b>"),"annotation page and type are bold");
+            list->setCurrentRow(0); bool formatted=false; QTimer formatDialog;
+            QObject::connect(&formatDialog,&QTimer::timeout,[&]{ if(auto dialog=reader.findChild<QDialog*>("underlineFormatDialog")) { dialog->findChild<QDoubleSpinBox*>("underlineFormatWidth")->setValue(5); formatted=true; dialog->accept(); } }); formatDialog.start(0);
+            for(auto button:reader.findChildren<QPushButton*>()) if(button->text()=="Editar") { button->click(); break; } formatDialog.stop();
+            require(formatted && canvas->pdf.copyAnnotation(0).strokeWidth==5 && canvas->pdf.annotationContents(0).isEmpty(),"Edit modifies underline format without creating a comment body");
+            if(!output.isEmpty()) { canvas->workers.waitForDone(); app.processEvents(); reader.grab().save(output+"/underline-and-annotations.png"); }
+            Window next; PageView* nextCanvas=nullptr; for(auto widget:next.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) nextCanvas=page;
+            require(nextCanvas->underlineWidth==4 && nextCanvas->underlineColor.rgb()==QColor("#cc2244").rgb(),"underline settings persist across windows");
+        }
+        {
+            class StartupWindow : public Window { public: int shows=0; bool firstMaximized=false,firstMinimized=false; protected: void showEvent(QShowEvent* event) override { if(shows++==0) { firstMaximized=isMaximized(); firstMinimized=isMinimized(); } Window::showEvent(event); } };
+            QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.setValue("window/state",int(Qt::WindowMaximized|Qt::WindowMinimized));
+            StartupWindow reader; require(reader.shows==0 && !reader.isVisible(),"startup construction does not show a preliminary window"); reader.restoreWindow(); app.processEvents();
+            require(reader.shows==1 && reader.firstMaximized && !reader.firstMinimized,"first visible startup frame has restored maximized state");
+            settings.setValue("window/state",0);
+        }
+        if(QApplication::platformName()=="windows") {
+            QPixmap sample(440,76); sample.fill(Qt::white);
+            QPainter painter(&sample); painter.setPen(Qt::black); painter.setFont(gpdfUiFont()); painter.drawText(8,26,"C S P 1 2 — Copia de texto permitida: Sí · 125%");
+            auto bold=gpdfUiFont(); bold.setBold(true); painter.setFont(bold); painter.drawText(8,56,"Página 12 · Propiedades · C S P 1 2"); painter.end();
+            auto image=sample.toImage(); int colored=0,smoothed=0;
+            for(int y=0;y<image.height();++y) for(int x=0;x<image.width();++x) { auto c=image.pixelColor(x,y); if(std::max({c.red(),c.green(),c.blue()})-std::min({c.red(),c.green(),c.blue()})>1) ++colored; if(c.red()>0 && c.red()<255 && c.red()==c.green() && c.red()==c.blue()) ++smoothed; }
+            const bool grayscale=gpdfUiFont().styleStrategy() & QFont::NoSubpixelAntialias;
+            if(grayscale && qgetenv("QT_QPA_PLATFORM").contains("fontengine=gdi")) require(colored==0 && smoothed>100,"Inter renders normal and bold text with grayscale smoothing and no colored fringes");
+            else require(colored+smoothed>100,"Inter renders normal and bold text with smoothing");
+            std::cout << "Inter rendering: colored=" << colored << " grayscale=" << smoothed << '\n';
+            if(!output.isEmpty()) sample.save(output+(grayscale ? "/inter-grayscale.png" : "/inter-subpixel.png"));
         }
         std::cout << "PASS: three view modes, scroll, paired navigation, correct-page annotations, editing and deletion.\n";
         return 0;

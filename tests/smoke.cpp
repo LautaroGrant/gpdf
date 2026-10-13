@@ -295,6 +295,31 @@ int main(int argc, char** argv) {
             require(reopened.pasteAnnotation(locked,{200,500}),"locked comment fixture"); revision=reopened.revision();
             require(reopened.moveCommentAnnotation(2,1,0,{50,600})<0 && reopened.revision()==revision && reopened.pageIndex()==2 && reopened.annotationCount()==2,"locked comment transfer is rejected without changing history");
         }
+        {
+            PdfDocument markup; require(markup.createSample(2,"Underline thickness and highlight"),"markup fixture");
+            auto bluePixels=[](const QImage& image){ int count=0; for(int y=0;y<image.height();++y) for(int x=0;x<image.width();++x) { auto c=image.pixelColor(x,y); if(c.blue()>c.red()+60 && c.blue()>c.green()+40) ++count; } return count; };
+            require(markup.underline(0,8,QColor("#2855b4"),0.5),"create standard underline");
+            require(markup.annotationType(0)==FPDF_ANNOT_UNDERLINE && markup.annotationContents(0).isEmpty(),"underline is text markup without a comment body");
+            auto thin=markup.render(2); require(bluePixels(thin)>0,"underline has a visible appearance");
+            require(markup.formatDrawing(0,QColor("#2855b4"),6),"change underline thickness"); auto thick=markup.render(2);
+            require(bluePixels(thick)>bluePixels(thin)*3,"selected thickness changes actual rendered line");
+            auto copy=markup.copyAnnotation(0); require(std::abs(copy.strokeWidth-6)<0.01 && !copy.quads.isEmpty(),"underline stores width and selected text geometry");
+            require(markup.drawingAt({copy.quads[0].x3+2,copy.quads[0].y3})==0,"underline can be selected or erased by its line");
+            require(markup.undo() && markup.render(2)==thin && markup.redo() && markup.render(2)==thick,"underline format undo and redo");
+            require(markup.recolorAnnotation(0,QColor("#cc2244")),"underline recolor succeeds");
+            require(markup.annotationColor(0).red()>180,"underline stores recolored value");
+            require(markup.copyAnnotation(0).strokeWidth==6,"underline recolor retains width");
+            require(markup.highlight(10,18) && markup.annotationCount()==2 && markup.annotationContents(1).isEmpty(),"highlight creates one markup annotation without a comment");
+            auto entries=markup.documentAnnotations(); require(entries[0].text.contains("Underline") && !entries[1].text.isEmpty(),"markup excerpts remain available to panel and export");
+            auto revision=markup.revision(); require(!markup.underline(0,8,Qt::blue,std::numeric_limits<double>::quiet_NaN()) && markup.revision()==revision,"invalid underline width leaves history unchanged");
+            const QString path=directory+"/text-markup.pdf"; require(markup.saveCopy(path),"save markup fixture"); auto image=markup.render(2);
+            PdfDocument reopened; require(reopened.open(path) && reopened.render(2)==image && reopened.copyAnnotation(0).strokeWidth==6,"markup appearance and thickness survive reopening");
+            auto raw=FPDF_LoadDocument(QFile::encodeName(path).constData(),nullptr); auto page=FPDF_LoadPage(raw,0);
+            require(page && FPDFPage_GetAnnotCount(page)==2,"PDF contains only the two markup annotations");
+            for(int i=0;i<2;++i) { auto annot=FPDFPage_GetAnnot(page,i); require(!FPDFAnnot_HasKey(annot,"Contents") && !FPDFAnnot_HasKey(annot,"Popup"),"saved markup has neither comment body nor popup"); FPDFPage_CloseAnnot(annot); }
+            FPDF_ClosePage(page); FPDF_CloseDocument(raw);
+            require(reopened.setPage(1) && reopened.pasteAnnotation(copy,{100,600}) && reopened.copyAnnotation(0).strokeWidth==6 && reopened.annotationType(0)==FPDF_ANNOT_UNDERLINE,"underline copy and paste preserves thickness on another page");
+        }
         std::cout << "PASS: annotation creation, editing, colors, deletion, failure rollback and persistence.\n";
         return 0;
     } catch(const std::exception& e) { std::cerr << "FAIL: " << e.what() << '\n'; return 1; }

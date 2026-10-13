@@ -1,10 +1,10 @@
-# GPDF 0.2.3
+# GPDF 0.2.5
 
 GPDF (antes StudyPDF) es un lector de PDF para estudiar en Windows x64, construido con C++20, Qt Widgets y PDFium. Estado: beta local funcional.
 
 ## Ejecutar
 
-La distribución vigente es `dist/GPDF-0.2.3/GPDF.exe`. La carpeta completa debe mantenerse junto al ejecutable; no hace falta instalar Qt. `build-info.json` identifica versión, commit, estado del código y hashes de los binarios. Las distribuciones anteriores se conservan como referencia.
+La distribución vigente es `dist/GPDF-0.2.5/GPDF.exe`. La carpeta completa debe mantenerse junto al ejecutable; no hace falta instalar Qt. `build-info.json` identifica versión, commit, estado del código y hashes de los binarios. Las distribuciones anteriores se conservan como referencia.
 
 Abrí un PDF desde Inicio o Archivo. Abrir otro archivo agrega una pestaña. Windows permite asociar PDFs mediante «Abrir con». La aplicación reutiliza la instancia abierta y recupera su estado maximizado o normal al abrir PDFs desde el escritorio.
 
@@ -12,7 +12,7 @@ Abrí un PDF desde Inicio o Archivo. Abrir otro archivo agrega una pestaña. Win
 
 - Vista continua, página individual y dos páginas; zoom, rotación y pantalla completa. El indicador de página permite escribir el número de destino y confirmar con Enter.
 - Selección y copia de texto; búsqueda sin distinguir mayúsculas ni acentos.
-- Comentarios, cuadros de texto, resaltados y lápiz; edición, color, borrado y deshacer/rehacer. Crear un comentario o hacer clic en su icono con Seleccionar o Comentario abre su contenido sobre la página; permite copiar texto y se cierra con ×, Esc o un clic fuera.
+- Comentarios, cuadros de texto, resaltados, subrayados y lápiz; edición, color, borrado y deshacer/rehacer. Crear un comentario o hacer clic en su icono con Seleccionar o Comentario abre su contenido sobre la página; permite copiar texto y se cierra con ×, Esc o un clic fuera.
 - Pestañas, miniaturas, índice del PDF, marcadores personales y progreso de lectura. El clic central sobre una pestaña cierra ese documento, con aviso si tiene cambios sin guardar.
 - Recuperación de cambios y restauración de sesión. Las copias de recuperación no reemplazan el original.
 - Exportación de anotaciones a Markdown, texto o HTML; impresión y vista previa.
@@ -21,6 +21,10 @@ Abrí un PDF desde Inicio o Archivo. Abrir otro archivo agrega una pestaña. Win
 Con Seleccionar, arrastrá el icono de un comentario para moverlo dentro de la página o a otra página. Acercalo al borde superior o inferior de la vista para desplazarte durante el arrastre; Esc cancela. El traslado conserva el contenido y permite deshacerlo en un solo paso.
 
 Las anotaciones se guardan dentro del PDF. Los marcadores personales y el progreso son locales y se identifican por ruta. El cambio de nombre conserva la ubicación de configuración de StudyPDF para mantener preferencias, marcadores y recuperación. Guardar como adopta el nuevo archivo como documento actual.
+
+Los iconos de lápiz, resaltado y subrayado muestran el color seleccionado. Seleccionar texto y pulsar Subrayar; su menú desplegable permite elegir color y grosor (0,5–12 pt). La lista de anotaciones muestra página y tipo en negrita. El arranque restaura la ventana antes de mostrarla y evita abrirla minimizada.
+
+Los resaltados nuevos no incluyen texto de comentario ni una anotación de comentario adicional. El fragmento seleccionado se obtiene del PDF para la lista y la exportación. Los lectores externos pueden incluir resaltados en su panel general de anotaciones; los comentarios ya existentes se conservan.
 
 ## Atajos predeterminados
 
@@ -37,7 +41,7 @@ Las anotaciones se guardan dentro del PDF. Los marcadores personales y el progre
 | Zoom con rueda (25 puntos porcentuales) | Ctrl+rueda |
 | Zoom con botones (10 puntos porcentuales) | + / − en la barra |
 
-Un clic con el botón central del mouse activa el desplazamiento automático. Un indicador queda en el punto de inicio; el cursor nativo de Windows cambia a arriba o abajo al mover el mouse. Otro clic o Esc lo detiene.
+Un clic con el botón central del mouse activa el desplazamiento automático. El cursor nativo de Windows cambia a arriba o abajo al mover el mouse; no se crea un indicador fijo. Otro clic o Esc lo detiene.
 
 Suprimir borra una anotación seleccionada; dentro de un campo de texto borra caracteres. Enter confirma comentarios y textos; Shift+Enter agrega una línea. El menú Atajos permite modificar estas combinaciones.
 
@@ -47,7 +51,7 @@ En PowerShell, con Python 3.11+ para instalar las herramientas:
 
 ```powershell
 ./scripts/bootstrap.ps1
-./scripts/build.ps1 -Package -PackageName GPDF-0.2.3
+./scripts/build.ps1 -Package -PackageName GPDF-0.2.5
 ```
 
 Las dependencias se instalan en el proyecto. La compilación ejecuta tres suites: núcleo/persistencia, interfaz y corpus PDF. Las pruebas de interfaz usan Qt offscreen y necesitan acceso a archivos temporales e IPC local de Windows.
@@ -71,8 +75,13 @@ La compatibilidad de edición con Edge/Acrobat y la impresión física requieren
 
 ## Desarrollo y distribución
 
+La versión 0.2.6 utiliza Segoe UI de 10 pt y el motor de fuentes predeterminado de Qt. Incluye los iconos de aplicación y documento proporcionados por el usuario. Al ejecutar GPDF, se registra como opción para abrir PDF en la cuenta actual; no cambia el programa predeterminado. Para probar el icono de documentos, ejecutar primero el build desde su ubicación definitiva y seleccionar GPDF como aplicación predeterminada para PDF en Configuración de Windows. El icono de documentos está integrado en el ejecutable, separado del icono de aplicación.
+
 El repositorio Git es local, sin remoto configurado. `baseline-0.1` conserva el punto de partida. Fuentes y PDFs sintéticos se versionan; herramientas, compilaciones, paquetes y documentos personales quedan fuera del repositorio.
 
+- `docs/validation-0.2.4.md`: revisión del idioma, arranque, resaltados, subrayado e interfaz.
+- `docs/validation-icons.md`: verificación de iconos y restauración de la fuente original.
+- `docs/validation-0.2.5.md`: investigación y comparación del renderizado de Inter al 100 %.
 - `docs/architecture.md`: componentes y decisiones de concurrencia.
 - `docs/validation-0.2.3.md`: verificación de traslado de comentarios, cierre de pestañas, búsqueda y navegación por número.
 - `docs/validation-0.2.2.md`: verificación de apertura externa, zoom, ventanas de comentarios y cursores nativos.

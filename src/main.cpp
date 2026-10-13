@@ -1,14 +1,19 @@
 #include "Window.h"
+#include "UiFont.h"
+#include "WindowsIntegration.h"
 
 int main(int argc,char** argv) {
+    configureUiFontBackend();
     QApplication app(argc,argv);
     app.setApplicationName("GPDF");
     app.setApplicationVersion(GPDF_VERSION);
+    app.setWindowIcon(QIcon(":/icons/gpdf.png"));
     app.setStyle("Fusion");
     installSpanishTranslations();
-    app.setFont(QFont("Segoe UI",10));
+    app.setFont(gpdfUiFont());
     const auto arguments=app.arguments();
     const bool snapshot=arguments.size()==4 && arguments[2]=="--snapshot";
+    if(!snapshot) registerPdfApplication();
     QStringList paths;
     for(int i=1;i<arguments.size();++i) { if(arguments[i]=="--snapshot") break; paths.append(QFileInfo(arguments[i]).absoluteFilePath()); }
     QString identity=qEnvironmentVariable("USERPROFILE",QDir::homePath());
@@ -19,16 +24,17 @@ int main(int argc,char** argv) {
     if(!snapshot) {
         auto result=instance.start(paths);
         if(result==SingleInstance::Forwarded) return 0;
-        if(result==SingleInstance::Failed) { QMessageBox::warning(nullptr,"GPDF","No se pudo comunicar con la instancia abierta. Volvé a intentar abrir el documento."); return 1; }
+        if(result==SingleInstance::Failed) { QMessageBox::warning(nullptr,"GPDF","No se pudo comunicar con la instancia abierta. Volver a intentar abrir el documento."); return 1; }
     }
-    Window window; window.show();
+    Window window;
     bool startupReady=false; QStringList pendingLaunches;
     instance.received=[&](const QStringList& incoming) {
         if(!startupReady) { pendingLaunches+=incoming; return; }
         window.openExternalDocuments(incoming);
     };
-    if(!snapshot) { window.restoreSession(); window.restoreWindow(); }
+    if(!snapshot) window.restoreSession();
     for(const auto& path:paths) window.openDocument(path);
+    if(!snapshot) window.restoreWindow(); else window.show();
     if(!snapshot && !paths.isEmpty()) window.presentForExternalOpen();
     startupReady=true; if(!pendingLaunches.isEmpty()) instance.received(pendingLaunches);
     if(snapshot) {

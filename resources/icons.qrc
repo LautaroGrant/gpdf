@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file alias="gpdf.png">icons/gpdf.png</file>
+    <file alias="pdf-document.png">icons/pdf-document.png</file>
+  </qresource>
+</RCC>

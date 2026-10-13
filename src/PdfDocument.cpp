@@ -29,6 +29,19 @@ std::recursive_mutex pdfiumMutex;
 bool setContents(FPDF_ANNOTATION annot, const QString& value) {
     return FPDFAnnot_SetStringValue(annot, "Contents", reinterpret_cast<FPDF_WIDESTRING>(value.utf16()));
 }
+bool underlineAppearance(FPDF_ANNOTATION annot,const QColor& color,double width) {
+    // An explicit standard appearance preserves the chosen thickness in other readers.
+    QString appearance=QString("q %1 %2 %3 RG %4 w 0 J ").arg(color.redF(),0,'f',4).arg(color.greenF(),0,'f',4).arg(color.blueF(),0,'f',4).arg(width,0,'f',4);
+    QRectF bounds;
+    for(size_t i=0;i<FPDFAnnot_CountAttachmentPoints(annot);++i) {
+        FS_QUADPOINTSF quad{}; if(!FPDFAnnot_GetAttachmentPoints(annot,i,&quad)) return false;
+        appearance+=QString("%1 %2 m %3 %4 l S ").arg(quad.x3,0,'f',4).arg(quad.y3,0,'f',4).arg(quad.x4,0,'f',4).arg(quad.y4,0,'f',4);
+        bounds=bounds.united(QRectF(QPointF(std::min({quad.x1,quad.x2,quad.x3,quad.x4}),std::min({quad.y1,quad.y2,quad.y3,quad.y4})),QPointF(std::max({quad.x1,quad.x2,quad.x3,quad.x4}),std::max({quad.y1,quad.y2,quad.y3,quad.y4}))));
+    }
+    appearance+="Q";
+    FS_RECTF box{float(bounds.left()),float(bounds.bottom()),float(bounds.right()),float(bounds.top()-width/2)};
+    return !bounds.isEmpty() && FPDFAnnot_SetRect(annot,&box) && FPDFAnnot_SetAP(annot,FPDF_ANNOT_APPEARANCEMODE_NORMAL,reinterpret_cast<FPDF_WIDESTRING>(appearance.utf16()));
+}
 QString styleValue(const PdfDocument::TextStyle& style) { std::lock_guard apiGuard(pdfiumMutex);
     return style.family+"\n"+QString::number(style.size)+"\n"+style.color.name()+"\n"+QString::number(style.width)+"\n"+QString::number(style.height);
 }
@@ -164,7 +177,7 @@ int PdfDocument::moveCommentAnnotation(int sourcePage,int index,int destinationP
     const int originalPage=index_;
     if(sourcePage<0 || sourcePage>=pageCount() || destinationPage<0 || destinationPage>=pageCount()) { fail("La página de destino no existe."); return -1; }
     if(!setPage(sourcePage)) return -1;
-    if(annotationType(index)!=FPDF_ANNOT_TEXT || !canEditAnnotation(index)) { setPage(originalPage); fail("Seleccioná un comentario editable."); return -1; }
+    if(annotationType(index)!=FPDF_ANNOT_TEXT || !canEditAnnotation(index)) { setPage(originalPage); fail("Seleccionar un comentario editable."); return -1; }
     auto source=FPDFPage_GetAnnot(page_,index);
     FS_RECTF previous{}; FPDFAnnot_GetRect(source,&previous);
     const float width=previous.right-previous.left,height=previous.top-previous.bottom;
@@ -201,7 +214,7 @@ int PdfDocument::moveCommentAnnotation(int sourcePage,int index,int destinationP
     setPage(destinationPage); dirty_=true; recordHistory(); return result;
 }
 bool PdfDocument::moveTextAnnotation(int index,QPointF topLeft) { std::lock_guard apiGuard(pdfiumMutex);
-    if(annotationType(index)!=FPDF_ANNOT_FREETEXT || !canEditAnnotation(index)) return fail("Seleccioná un cuadro de texto editable.");
+    if(annotationType(index)!=FPDF_ANNOT_FREETEXT || !canEditAnnotation(index)) return fail("Seleccionar un cuadro de texto editable.");
     auto annot=FPDFPage_GetAnnot(page_,index); auto rect=annotationRect(index); auto value=annotationContents(index); auto style=annotationTextStyle(index);
     style.width=rect.width(); style.height=rect.height();
     topLeft.setX(std::clamp(topLeft.x(),0.0,std::max(0.0,pageSize().width()-rect.width())));
@@ -233,12 +246,14 @@ bool PdfDocument::pasteAnnotation(const AnnotationCopy& copy,QPointF topLeft) { 
     auto annot=FPDFPage_CreateAnnot(page_,FPDF_ANNOTATION_SUBTYPE(copy.type)); if(!annot) return fail("No se pudo pegar la anotación.");
     FS_RECTF rect{float(topLeft.x()),float(topLeft.y()),float(topLeft.x()+copy.rect.width()),float(topLeft.y()-copy.rect.height())};
     FPDFAnnot_SetFlags(annot,copy.flags);
-    if(copy.type==FPDF_ANNOT_INK) FPDFAnnot_SetBorder(annot,0,0,copy.strokeWidth);
-    bool ok=FPDFAnnot_SetRect(annot,&rect) && setContents(annot,copy.text);
+    if(copy.type==FPDF_ANNOT_INK || copy.type==FPDF_ANNOT_UNDERLINE) FPDFAnnot_SetBorder(annot,0,0,copy.strokeWidth);
+    bool ok=FPDFAnnot_SetRect(annot,&rect);
+    if(!copy.text.isEmpty() || (copy.type!=FPDF_ANNOT_HIGHLIGHT && copy.type!=FPDF_ANNOT_UNDERLINE)) ok=setContents(annot,copy.text) && ok;
     if(copy.color.isValid()) ok=FPDFAnnot_SetColor(annot,FPDFANNOT_COLORTYPE_Color,copy.color.red(),copy.color.green(),copy.color.blue(),copy.color.alpha()) && ok;
     float dx=float(topLeft.x()-copy.rect.left()),dy=float(topLeft.y()-copy.rect.bottom());
     for(auto quad:copy.quads) { quad.x1+=dx;quad.x2+=dx;quad.x3+=dx;quad.x4+=dx;quad.y1+=dy;quad.y2+=dy;quad.y3+=dy;quad.y4+=dy; ok=FPDFAnnot_AppendAttachmentPoints(annot,&quad) && ok; }
     for(auto points:copy.strokes) { for(auto& point:points) { point.x+=dx;point.y+=dy; } ok=(FPDFAnnot_AddInkStroke(annot,points.data(),points.size())>=0) && ok; }
+    if(copy.type==FPDF_ANNOT_UNDERLINE) ok=underlineAppearance(annot,copy.color,copy.strokeWidth) && ok;
     FPDFPage_CloseAnnot(annot);
     if(!ok) { FPDFPage_RemoveAnnot(page_,annotationCount()-1); return fail("No se pudo pegar la anotación."); }
     dirty_=true; recordHistory(); return true;
@@ -466,7 +481,9 @@ QString PdfDocument::selectionText(int first, int last) const { std::lock_guard 
     int length = FPDFText_GetText(text_, first, last-first+1, buffer.data());
     return length > 0 ? QString::fromUtf16(reinterpret_cast<const char16_t*>(buffer.data()), length-1) : QString();
 }
-bool PdfDocument::highlight(int first, int last,const QColor& color) {
+bool PdfDocument::highlight(int first,int last,const QColor& color) { return textMarkup(first,last,color,FPDF_ANNOT_HIGHLIGHT,1); }
+bool PdfDocument::underline(int first,int last,const QColor& color,double width) { return textMarkup(first,last,color,FPDF_ANNOT_UNDERLINE,width); }
+bool PdfDocument::textMarkup(int first, int last,const QColor& color,int type,double width) {
 #ifdef GPDF_PERF_PROBE
     QElapsedTimer profile; profile.start();
 #endif
@@ -475,6 +492,7 @@ bool PdfDocument::highlight(int first, int last,const QColor& color) {
     qInfo()<<"PERF highlight_lock_ms"<<profile.nsecsElapsed()/1000000.0;
 #endif
     if(!canAddAnnotations()) return fail("El documento no permite agregar anotaciones.");
+    if(!color.isValid() || !std::isfinite(width) || width<0.5 || width>12) return fail("Color o grosor no válido.");
     // PDFium can split a visual line at font runs and omit the spaces between them.
     // Join nearby runs on the same baseline, without spanning column-sized gaps.
     QVector<QRectF> rects;
@@ -492,9 +510,9 @@ bool PdfDocument::highlight(int first, int last,const QColor& color) {
         }
         if(!joined) rects.append(r);
     }
-    if (rects.isEmpty()) return fail("Seleccioná texto antes de resaltar.");
-    auto annot = FPDFPage_CreateAnnot(page_, FPDF_ANNOT_HIGHLIGHT);
-    if (!annot) return fail("Esta versión de PDFium no permite crear resaltados.");
+    if (rects.isEmpty()) return fail("Seleccionar texto antes de resaltar o subrayar.");
+    auto annot = FPDFPage_CreateAnnot(page_, FPDF_ANNOTATION_SUBTYPE(type));
+    if (!annot) return fail("No se pudo crear la marca de texto.");
     FPDFAnnot_SetFlags(annot,FPDF_ANNOT_FLAG_PRINT);
     QRectF bounds;
     bool ok = FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_Color, color.red(), color.green(), color.blue(), color.alpha());
@@ -503,10 +521,12 @@ bool PdfDocument::highlight(int first, int last,const QColor& color) {
         FS_QUADPOINTSF quad{float(r.left()),float(r.bottom()),float(r.right()),float(r.bottom()),float(r.left()),float(r.top()),float(r.right()),float(r.top())};
         ok = FPDFAnnot_AppendAttachmentPoints(annot, &quad) && ok;
     }
-    FS_RECTF box{float(bounds.left()),float(bounds.bottom()),float(bounds.right()),float(bounds.top())};
-    ok = FPDFAnnot_SetRect(annot, &box) && setContents(annot, selectionText(first,last)) && ok;
+    FS_RECTF box{float(bounds.left()),float(bounds.bottom()),float(bounds.right()),float(bounds.top()-(type==FPDF_ANNOT_UNDERLINE ? width/2 : 0))};
+    // Text markup has no comment body. Its excerpt is extracted only for GPDF's panel/export.
+    ok = FPDFAnnot_SetRect(annot, &box) && ok;
+    if(type==FPDF_ANNOT_UNDERLINE) ok=FPDFAnnot_SetBorder(annot,0,0,float(width)) && underlineAppearance(annot,color,width) && ok;
     FPDFPage_CloseAnnot(annot);
-    if (!ok) { FPDFPage_RemoveAnnot(page_, annotationCount()-1); return fail("Falló la creación del resaltado."); }
+    if (!ok) { FPDFPage_RemoveAnnot(page_, annotationCount()-1); return fail("Falló la creación de la marca de texto."); }
     dirty_ = true; recordHistory();
 #ifdef GPDF_PERF_PROBE
     qInfo()<<"PERF highlight_total_ms"<<profile.nsecsElapsed()/1000000.0;
@@ -547,7 +567,7 @@ bool PdfDocument::writeFreeText(FPDF_ANNOTATION annot, QPointF p, const QString&
     if(mutated) *mutated=false;
     const float left = float(p.x()), top = float(p.y());
     const float width = float(std::min(std::max(30.0,style.width), pageSize().width()-p.x()));
-    if (width < 30 || top < 30) { return fail("Elegí un punto más alejado del borde derecho o inferior."); }
+    if (width < 30 || top < 30) { return fail("Elegir un punto más alejado del borde derecho o inferior."); }
     QFont font(style.family); font.setPixelSize(style.size);
     QPainterPath glyphs;
     double y = 5;
@@ -565,7 +585,7 @@ bool PdfDocument::writeFreeText(FPDF_ANNOTATION annot, QPointF p, const QString&
         if (paragraph.isEmpty()) y += style.size*1.2;
     }
     const float height = float(std::max(y+5,style.height));
-    if (height > top) { return fail("El texto no cabe en la página. Elegí un punto más arriba o un comentario más corto."); }
+    if (height > top) { return fail("El texto no cabe en la página. Elegir un punto más arriba o un comentario más corto."); }
     FS_RECTF box{left,top,left+width,top-height};
     // Vector glyph appearances preserve accents without depending on viewer font resources.
     // Editable Unicode text remains in the standard annotation Contents entry.
@@ -592,7 +612,7 @@ bool PdfDocument::writeFreeText(FPDF_ANNOTATION annot, QPointF p, const QString&
 }
 bool PdfDocument::ink(const QVector<QPointF>& points,const QColor& color,double width) { std::lock_guard apiGuard(pdfiumMutex);
     if(!canAddAnnotations()) return fail("El documento no permite agregar anotaciones.");
-    if (!page_ || points.size() < 2) return fail("Dibujá un trazo de al menos dos puntos.");
+    if (!page_ || points.size() < 2) return fail("Dibujar un trazo de al menos dos puntos.");
     auto annot = FPDFPage_CreateAnnot(page_, FPDF_ANNOT_INK);
     if (!annot) return fail("No se pudo crear el trazo.");
     FPDFAnnot_SetFlags(annot,FPDF_ANNOT_FLAG_PRINT);
@@ -657,7 +677,7 @@ bool PdfDocument::canAddAnnotations() const { std::lock_guard apiGuard(pdfiumMut
 bool PdfDocument::canEditAnnotation(int index) const { std::lock_guard apiGuard(pdfiumMutex);
     if(!canAddAnnotations()) return false;
     int type=annotationType(index);
-    if (type!=FPDF_ANNOT_TEXT && type!=FPDF_ANNOT_FREETEXT && type!=FPDF_ANNOT_HIGHLIGHT && type!=FPDF_ANNOT_INK) return false;
+    if (type!=FPDF_ANNOT_TEXT && type!=FPDF_ANNOT_FREETEXT && type!=FPDF_ANNOT_HIGHLIGHT && type!=FPDF_ANNOT_UNDERLINE && type!=FPDF_ANNOT_INK) return false;
     auto annot=FPDFPage_GetAnnot(page_,index);
     if (!annot) return false;
     int flags=FPDFAnnot_GetFlags(annot);
@@ -667,7 +687,7 @@ bool PdfDocument::canEditAnnotation(int index) const { std::lock_guard apiGuard(
 }
 bool PdfDocument::canColorAnnotation(int index) const { std::lock_guard apiGuard(pdfiumMutex);
     const int type=annotationType(index);
-    return canEditAnnotation(index) && (type==FPDF_ANNOT_HIGHLIGHT || type==FPDF_ANNOT_INK);
+    return canEditAnnotation(index) && (type==FPDF_ANNOT_HIGHLIGHT || type==FPDF_ANNOT_UNDERLINE || type==FPDF_ANNOT_INK);
 }
 QColor PdfDocument::annotationColor(int index) const { std::lock_guard apiGuard(pdfiumMutex);
     if (!page_ || index<0 || index>=annotationCount()) return {};
@@ -679,7 +699,7 @@ QColor PdfDocument::annotationColor(int index) const { std::lock_guard apiGuard(
         for(int i=0;i<FPDFAnnot_GetObjectCount(annot);++i) {
             auto object=FPDFAnnot_GetObject(annot,i);
             if(!object) continue;
-            ok=FPDFAnnot_GetSubtype(annot)==FPDF_ANNOT_INK ?
+            ok=(FPDFAnnot_GetSubtype(annot)==FPDF_ANNOT_INK || FPDFAnnot_GetSubtype(annot)==FPDF_ANNOT_UNDERLINE) ?
                 FPDFPageObj_GetStrokeColor(object,&r,&g,&b,&a) : FPDFPageObj_GetFillColor(object,&r,&g,&b,&a);
             if(ok) break;
         }
@@ -705,7 +725,7 @@ PdfDocument::TextStyle PdfDocument::annotationTextStyle(int index) const { std::
 }
 bool PdfDocument::editAnnotation(int index,const QString& value,const TextStyle* requestedStyle) { std::lock_guard apiGuard(pdfiumMutex);
     if (!canEditAnnotation(index)) return fail("La anotación no se puede editar: selección inválida, tipo no admitido o protección del PDF.");
-    if (value.trimmed().isEmpty()) return fail("El texto no puede estar vacío. Usá Borrar para eliminar la anotación.");
+    if (value.trimmed().isEmpty()) return fail("El texto no puede estar vacío. Usar Borrar para eliminar la anotación.");
     const QString oldContents=annotationContents(index);
     if (value==oldContents && !requestedStyle) return true;
     if(requestedStyle && (requestedStyle->size<6 || requestedStyle->size>96 || !requestedStyle->color.isValid())) return fail("Formato de texto inválido.");
@@ -742,7 +762,7 @@ bool PdfDocument::editAnnotation(int index,const QString& value,const TextStyle*
     return ok;
 }
 bool PdfDocument::recolorAnnotation(int index,const QColor& color) { std::lock_guard apiGuard(pdfiumMutex);
-    if (!canColorAnnotation(index) || !color.isValid()) return fail("Seleccioná un resaltado o un trazo editable y un color válido.");
+    if (!canColorAnnotation(index) || !color.isValid()) return fail("Seleccionar un resaltado o un trazo editable y un color válido.");
     auto annot=FPDFPage_GetAnnot(page_,index);
     if (!annot) return fail("No se pudo cargar la anotación.");
     // SetColor cannot modify an annotation with an explicit appearance stream.
@@ -755,6 +775,7 @@ bool PdfDocument::recolorAnnotation(int index,const QColor& color) { std::lock_g
     if(ok) {
         FPDFAnnot_GetColor(annot,FPDFANNOT_COLORTYPE_Color,&r,&g,&b,&a);
         ok=FPDFAnnot_SetColor(annot,FPDFANNOT_COLORTYPE_Color,color.red(),color.green(),color.blue(),a);
+        if(ok && annotationType(index)==FPDF_ANNOT_UNDERLINE) { float horizontal=0,vertical=0,width=1.5; FPDFAnnot_GetBorder(annot,&horizontal,&vertical,&width); ok=underlineAppearance(annot,color,width); }
     }
     if(!ok) {
         FPDFAnnot_SetColor(annot,FPDFANNOT_COLORTYPE_Color,r,g,b,a);
@@ -796,14 +817,29 @@ QVector<PdfDocument::AnnotationEntry> PdfDocument::pageAnnotations(int index) co
     if(auto cached=annotationPages_.constFind(index); cached!=annotationPages_.cend()) return cached.value();
     QVector<AnnotationEntry> entries;
         auto page=FPDF_LoadPage(doc_,index); if(!page) return entries;
+        FPDF_TEXTPAGE pageText=nullptr;
         for(int i=0;i<FPDFPage_GetAnnotCount(page);++i) {
             auto annotation=FPDFPage_GetAnnot(page,i); if(!annotation) continue;
             auto size=FPDFAnnot_GetStringValue(annotation,"Contents",nullptr,0);
             QVector<unsigned short> text(size/2);
             if(size) FPDFAnnot_GetStringValue(annotation,"Contents",text.data(),size);
-            entries.append({index,i,FPDFAnnot_GetSubtype(annotation),size ? QString::fromUtf16(reinterpret_cast<const char16_t*>(text.constData())) : QString()});
+            int type=FPDFAnnot_GetSubtype(annotation);
+            QString contents=size ? QString::fromUtf16(reinterpret_cast<const char16_t*>(text.constData())) : QString();
+            if(contents.isEmpty() && (type==FPDF_ANNOT_HIGHLIGHT || type==FPDF_ANNOT_UNDERLINE)) {
+                if(!pageText) pageText=FPDFText_LoadPage(page);
+                QStringList lines;
+                for(size_t q=0;pageText && q<FPDFAnnot_CountAttachmentPoints(annotation);++q) {
+                    FS_QUADPOINTSF quad{}; if(!FPDFAnnot_GetAttachmentPoints(annotation,q,&quad)) continue;
+                    double left=std::min({quad.x1,quad.x2,quad.x3,quad.x4}),right=std::max({quad.x1,quad.x2,quad.x3,quad.x4}),top=std::max({quad.y1,quad.y2,quad.y3,quad.y4}),bottom=std::min({quad.y1,quad.y2,quad.y3,quad.y4});
+                    int count=FPDFText_GetBoundedText(pageText,left,top,right,bottom,nullptr,0);
+                    if(count>0) { QVector<unsigned short> value(count+1); int written=FPDFText_GetBoundedText(pageText,left,top,right,bottom,value.data(),value.size()); lines.append(QString::fromUtf16(reinterpret_cast<const char16_t*>(value.constData()),written).remove(QChar(0))); }
+                }
+                contents=lines.join('\n');
+            }
+            entries.append({index,i,type,contents});
             FPDFPage_CloseAnnot(annotation);
         }
+        if(pageText) FPDFText_ClosePage(pageText);
         FPDF_ClosePage(page);
     annotationPages_.insert(index,entries); return entries;
 }
@@ -844,9 +880,9 @@ QVector<PdfDocument::Bookmark> PdfDocument::bookmarks() const { std::lock_guard 
 int PdfDocument::drawingAt(QPointF point,double tolerance) const {
     std::lock_guard guard(apiMutex());
     for(int index=annotationCount()-1;index>=0;--index) {
-        auto type=annotationType(index); if(type!=FPDF_ANNOT_INK && type!=FPDF_ANNOT_HIGHLIGHT) continue;
+        auto type=annotationType(index); if(type!=FPDF_ANNOT_INK && type!=FPDF_ANNOT_HIGHLIGHT && type!=FPDF_ANNOT_UNDERLINE) continue;
         auto copy=copyAnnotation(index);
-        if(type==FPDF_ANNOT_HIGHLIGHT) { for(const auto& quad:copy.quads) { QRectF box(QPointF(std::min(quad.x1,quad.x3),std::min(quad.y1,quad.y3)),QPointF(std::max(quad.x2,quad.x4),std::max(quad.y2,quad.y4))); if(box.normalized().adjusted(-tolerance,-tolerance,tolerance,tolerance).contains(point)) return index; } }
+        if(type==FPDF_ANNOT_HIGHLIGHT || type==FPDF_ANNOT_UNDERLINE) { for(const auto& quad:copy.quads) { QRectF box=type==FPDF_ANNOT_UNDERLINE ? QRectF(QPointF(quad.x3,quad.y3),QPointF(quad.x4,quad.y4)).normalized() : QRectF(QPointF(std::min(quad.x1,quad.x3),std::min(quad.y1,quad.y3)),QPointF(std::max(quad.x2,quad.x4),std::max(quad.y2,quad.y4))).normalized(); double margin=tolerance+(type==FPDF_ANNOT_UNDERLINE ? copy.strokeWidth/2 : 0); if(box.adjusted(-margin,-margin,margin,margin).contains(point)) return index; } }
         else {
             auto annot=FPDFPage_GetAnnot(page_,index); float horizontal=0,vertical=0,width=2; FPDFAnnot_GetBorder(annot,&horizontal,&vertical,&width); FPDFPage_CloseAnnot(annot);
             for(const auto& stroke:copy.strokes) for(int i=1;i<stroke.size();++i) {
@@ -861,11 +897,12 @@ int PdfDocument::drawingAt(QPointF point,double tolerance) const {
 
 bool PdfDocument::formatDrawing(int index,const QColor& color,double width) {
     std::lock_guard guard(apiMutex()); int type=annotationType(index);
-    if((type!=FPDF_ANNOT_INK && type!=FPDF_ANNOT_HIGHLIGHT) || !canEditAnnotation(index) || !color.isValid() || width<0.5 || width>12) return fail("Seleccioná un trazo o resaltado editable.");
+    if((type!=FPDF_ANNOT_INK && type!=FPDF_ANNOT_HIGHLIGHT && type!=FPDF_ANNOT_UNDERLINE) || !canEditAnnotation(index) || !color.isValid() || !std::isfinite(width) || width<0.5 || width>12) return fail("Seleccionar un trazo, resaltado o subrayado editable.");
     auto annot=FPDFPage_GetAnnot(page_,index); auto oldColor=annotationColor(index); float horizontal=0,vertical=0,oldWidth=2; FPDFAnnot_GetBorder(annot,&horizontal,&vertical,&oldWidth);
     unsigned long size=FPDFAnnot_GetAP(annot,FPDF_ANNOT_APPEARANCEMODE_NORMAL,nullptr,0); QVector<unsigned short> ap(size/2); if(size) FPDFAnnot_GetAP(annot,FPDF_ANNOT_APPEARANCEMODE_NORMAL,ap.data(),size);
     bool ok=FPDFAnnot_SetAP(annot,FPDF_ANNOT_APPEARANCEMODE_NORMAL,nullptr) && FPDFAnnot_SetColor(annot,FPDFANNOT_COLORTYPE_Color,color.red(),color.green(),color.blue(),color.alpha());
-    if(ok && type==FPDF_ANNOT_INK) ok=FPDFAnnot_SetBorder(annot,0,0,float(width));
+    if(ok && (type==FPDF_ANNOT_INK || type==FPDF_ANNOT_UNDERLINE)) ok=FPDFAnnot_SetBorder(annot,0,0,float(width));
+    if(ok && type==FPDF_ANNOT_UNDERLINE) ok=underlineAppearance(annot,color,width);
     if(!ok) { FPDFAnnot_SetColor(annot,FPDFANNOT_COLORTYPE_Color,oldColor.red(),oldColor.green(),oldColor.blue(),oldColor.alpha()); FPDFAnnot_SetBorder(annot,horizontal,vertical,oldWidth); if(size) FPDFAnnot_SetAP(annot,FPDF_ANNOT_APPEARANCEMODE_NORMAL,ap.data()); }
     FPDFPage_CloseAnnot(annot); if(ok) { dirty_=true; recordHistory(); } return ok;
 }

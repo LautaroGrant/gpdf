@@ -135,9 +135,10 @@ public:
 
 class GpdfToolIcon : public QIconEngine {
     int tool;
+    QColor drawingColor;
 public:
-    explicit GpdfToolIcon(int value):tool(value) {}
-    QIconEngine* clone() const override { return new GpdfToolIcon(tool); }
+    explicit GpdfToolIcon(int value,QColor selectedColor=QColor("#ffd232")):tool(value),drawingColor(selectedColor) {}
+    QIconEngine* clone() const override { return new GpdfToolIcon(tool,drawingColor); }
     QPixmap pixmap(const QSize& size,QIcon::Mode mode,QIcon::State state) override {
         QPixmap image(size); image.fill(Qt::transparent);
         QPainter painter(&image); paint(&painter,QRect(QPoint(0,0),size),mode,state);
@@ -154,7 +155,9 @@ public:
         else if(tool==1) { path.moveTo(5,4); path.lineTo(19,4); path.quadTo(21,4,21,6); path.lineTo(21,15); path.quadTo(21,17,19,17); path.lineTo(10,17); path.lineTo(5,21); path.lineTo(5,17); path.quadTo(3,17,3,15); path.lineTo(3,6); path.quadTo(3,4,5,4); painter->drawPath(path); painter->drawLine(QPointF(7,8),QPointF(17,8)); painter->drawLine(QPointF(7,12),QPointF(14,12)); }
         else if(tool==2) { painter->drawLine(QPointF(5,5),QPointF(19,5)); painter->drawLine(QPointF(12,5),QPointF(12,20)); painter->drawLine(QPointF(8,20),QPointF(16,20)); }
         else if(tool==3) { path.moveTo(4,16); path.lineTo(15,5); path.quadTo(17,3,19,5); path.quadTo(21,7,19,9); path.lineTo(8,20); path.lineTo(3,21); path.closeSubpath(); painter->drawPath(path); painter->drawLine(QPointF(13,7),QPointF(17,11)); painter->drawLine(QPointF(4,16),QPointF(8,20)); }
-        else { path.moveTo(7,15); path.lineTo(15,4); path.lineTo(21,9); path.lineTo(13,19); path.closeSubpath(); painter->drawPath(path); painter->drawLine(QPointF(6,16),QPointF(3,20)); painter->drawLine(QPointF(3,20),QPointF(9,20)); painter->drawLine(QPointF(9,20),QPointF(11,18)); painter->setPen(QPen(QColor("#ffd232"),2.5,Qt::SolidLine,Qt::RoundCap)); painter->drawLine(QPointF(3,23),QPointF(21,23)); }
+        else if(tool==5) { painter->drawLine(QPointF(6,4),QPointF(6,13)); painter->drawLine(QPointF(18,4),QPointF(18,13)); path.moveTo(6,13); path.cubicTo(6,21,18,21,18,13); painter->drawPath(path); }
+        else { path.moveTo(7,15); path.lineTo(15,4); path.lineTo(21,9); path.lineTo(13,19); path.closeSubpath(); painter->drawPath(path); painter->drawLine(QPointF(6,16),QPointF(3,20)); painter->drawLine(QPointF(3,20),QPointF(9,20)); painter->drawLine(QPointF(9,20),QPointF(11,18)); }
+        if(tool>=3) { auto indicator=drawingColor; indicator.setAlpha(255); painter->setPen(QPen(indicator,2.5,Qt::SolidLine,Qt::RoundCap)); painter->drawLine(QPointF(3,23),QPointF(21,23)); }
         painter->restore();
     }
 };
@@ -187,21 +190,22 @@ void installSpanishTranslations();
 
 class SearchResultDelegate : public QStyledItemDelegate {
     mutable QCache<QString,QSize> hintCache{4*1024};
+    int htmlRole;
 public:
-    using QStyledItemDelegate::QStyledItemDelegate;
+    explicit SearchResultDelegate(QObject* parent=nullptr,int role=Qt::UserRole):QStyledItemDelegate(parent),htmlRole(role) {}
     void paint(QPainter* painter,const QStyleOptionViewItem& option,const QModelIndex& index) const override {
         QStyleOptionViewItem background(option); initStyleOption(&background,index); background.text.clear();
         auto style=option.widget ? option.widget->style() : QApplication::style();
         style->drawControl(QStyle::CE_ItemViewItem,&background,painter,option.widget);
         if(option.state & QStyle::State_Selected) painter->fillRect(option.rect,option.palette.brush(QPalette::Highlight));
-        QTextDocument text; text.setDefaultFont(option.font); text.setHtml(QString("<div style=\"color: %1\">%2</div>").arg(option.palette.color(option.state & QStyle::State_Selected ? QPalette::HighlightedText : QPalette::Text).name(),index.data(Qt::UserRole).toString())); text.setTextWidth(option.rect.width()-8);
+        QTextDocument text; text.setDefaultFont(option.font); text.setHtml(QString("<div style=\"color: %1\">%2</div>").arg(option.palette.color(option.state & QStyle::State_Selected ? QPalette::HighlightedText : QPalette::Text).name(),index.data(htmlRole).toString())); text.setTextWidth(option.rect.width()-8);
         QAbstractTextDocumentLayout::PaintContext context; context.palette=option.palette;
         if(option.state & QStyle::State_Selected) context.palette.setColor(QPalette::Text,option.palette.color(QPalette::HighlightedText));
         painter->save(); painter->setClipRect(option.rect); painter->translate(option.rect.topLeft()+QPoint(4,2)); text.documentLayout()->draw(painter,context); painter->restore();
     }
     QSize sizeHint(const QStyleOptionViewItem& option,const QModelIndex& index) const override {
         int width=option.widget ? option.widget->width()-12 : 240;
-        QString html=index.data(Qt::UserRole).toString();
+        QString html=index.data(htmlRole).toString();
         QString key=QString::number(width)+'|'+option.font.toString()+'|'+html;
         if(auto size=hintCache.object(key)) return *size;
         QTextDocument text; text.setDefaultFont(option.font); text.setHtml(html); text.setTextWidth(std::max(100,width));
@@ -228,7 +232,7 @@ class TextResizeGrip : public QWidget {
     QSize original;
     QWidget* target;
 public:
-    explicit TextResizeGrip(QWidget* parent):QWidget(parent),target(parent) { setMouseTracking(true); setFixedSize(16,16); setCursor(Qt::SizeFDiagCursor); setToolTip("Arrastrá para ampliar o reducir el recuadro"); }
+    explicit TextResizeGrip(QWidget* parent):QWidget(parent),target(parent) { setMouseTracking(true); setFixedSize(16,16); setCursor(Qt::SizeFDiagCursor); setToolTip("Arrastrar para ampliar o reducir el recuadro"); }
 protected:
     void paintEvent(QPaintEvent*) override { QPainter p(this); p.setPen(QColor("#788694")); for(int i=4;i<=12;i+=4) p.drawLine(i,14,14,i); }
     void mousePressEvent(QMouseEvent* e) override { start=e->globalPosition().toPoint(); original=target->size(); e->accept(); }

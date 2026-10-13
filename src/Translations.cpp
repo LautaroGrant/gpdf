@@ -4,7 +4,7 @@ public:
     using QTranslator::QTranslator;
     bool isEmpty() const override { return false; }
     QString translate(const char* context,const char* source,const char*,int) const override {
-        if(qstrcmp(context,"QKeySequenceEdit")==0 && qstrcmp(source,"Press shortcut")==0) return "Presioná un atajo";
+        if(qstrcmp(context,"QKeySequenceEdit")==0 && qstrcmp(source,"Press shortcut")==0) return "Presionar un atajo";
         return {};
     }
 };

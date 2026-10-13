@@ -13,6 +13,8 @@ public:
     Tool tool=Select;
     QColor penColor=QColor(40,85,180),highlightColor=QColor(255,210,50,153),secondaryHighlightColor=QColor(232,136,16,153);
     double penWidth=2;
+    QColor underlineColor=QColor(40,85,180);
+    double underlineWidth=1.5;
     bool darkMode=false;
     void eraseAt(QPointF position) {
         int page=pageAt(position); if(page<0) return; activate(page);
@@ -86,7 +88,7 @@ public:
         auto layout=new QVBoxLayout(textEditor); layout->setContentsMargins(4,4,4,4); layout->setSpacing(3); layout->setSizeConstraint(QLayout::SetNoConstraint);
         textInput=new QTextEdit; textInput->setObjectName("inlineTextInput"); textInput->setAcceptRichText(false);
         textInput->setAutoFillBackground(false); textInput->viewport()->setAutoFillBackground(false);
-        textInput->setPlaceholderText("Escribí aquí…"); layout->addWidget(textInput);
+        textInput->setPlaceholderText("Escribir aquí…"); layout->addWidget(textInput);
         auto controls=new QWidget; auto row=new QHBoxLayout(controls); row->setContentsMargins(0,0,0,0); row->setSpacing(3);
         auto formatScroll=new QScrollArea; formatScroll->setWidget(controls); formatScroll->setWidgetResizable(true);
         formatScroll->setFrameShape(QFrame::NoFrame); formatScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -113,7 +115,7 @@ public:
         row->addWidget(new TextResizeGrip(textEditor));
         auto anchor=devicePoint(point); auto page=activeRect();
         int availableWidth=int(page.right()-anchor.x()),availableHeight=int(page.bottom()-anchor.y());
-        if(availableWidth<120 || availableHeight<100) { cancelText(); if(report) report("Elegí un punto más alejado de los bordes derecho e inferior."); return; }
+        if(availableWidth<120 || availableHeight<100) { cancelText(); if(report) report("Elegir un punto más alejado de los bordes derecho e inferior."); return; }
         textEditor->setMinimumSize(std::min(180,availableWidth),100); textEditor->setMaximumSize(availableWidth,availableHeight);
         textEditor->setGeometry(int(anchor.x()),int(anchor.y()),std::min(availableWidth,std::max(330,int(textStyle.width*effectiveScale))),std::min(availableHeight,std::max(140,int(textStyle.height*effectiveScale)+44)));
         textInput->setPlainText(contents);
@@ -255,7 +257,7 @@ protected:
     void paintEvent(QPaintEvent* event) override {
         QPainter painter(this); painter.setRenderHint(QPainter::SmoothPixmapTransform);
         painter.fillRect(event->rect(),darkMode ? QColor("#20252d") : QColor("#e9edf2"));
-        if(!pdf.loaded()) { painter.setPen(QColor("#6b7280")); painter.drawText(rect(),Qt::AlignCenter,"Hacé clic aquí para abrir un PDF"); return; }
+        if(!pdf.loaded()) { painter.setPen(QColor("#6b7280")); painter.drawText(rect(),Qt::AlignCenter,"Hacer clic aquí para abrir un PDF"); return; }
         // Painting never waits for a background PDFium operation. Keep cached pages visible.
         std::unique_lock apiLock(PdfDocument::apiMutex(),std::try_to_lock);
         if(!apiLock.owns_lock() && !renderRetryScheduled) {

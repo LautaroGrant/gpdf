@@ -1,5 +1,31 @@
 # Cambios
 
+## 0.2.6 — 13 de octubre de 2026
+
+- Subrayado estándar PDF con color, grosor e indicador en la barra; edición, borrado, copia y deshacer/rehacer.
+- Resaltados nuevos sin cuerpo de comentario; fragmentos disponibles en el panel y la exportación.
+- Español neutro, página y tipo de anotación en negrita e indicadores de color para lápiz y resaltado.
+- Arranque con estado restaurado antes de mostrar la ventana y desplazamiento automático sin indicador fijo.
+- Iconos de aplicación y documentos PDF integrados en el ejecutable; registro por usuario para elegir GPDF como predeterminado, sin cambiar la elección automáticamente.
+- Fuente original Segoe UI de 10 puntos restaurada tras las pruebas de Inter.
+
+## 0.2.5 — 13 de octubre de 2026 (build local, sin commit)
+
+- Inter a 10 pt con suavizado en escala de grises y ajuste completo a píxeles.
+- Motor GDI para la interfaz de Windows: evita los bordes de color observados con DirectWrite al 100 % en esta instalación.
+- Configuración local a GPDF; se respetan plataformas y motores definidos explícitamente. No cambia fuentes instaladas ni preferencias de Windows.
+- Prueba nativa de letras C/S/P y números 1/2, en peso normal y negrita, sin franjas de color y conservando el suavizado.
+
+## 0.2.4 — 13 de octubre de 2026 (build local, sin commit)
+
+- Conserva la fuente Inter y los cambios de traducción del usuario; textos de la aplicación en español neutro.
+- Desplazamiento automático con un solo cursor nativo, sin indicador fijo.
+- Resaltados nuevos sin cuerpo de comentario ni popup; los fragmentos del panel y exportación se extraen del texto del PDF.
+- Página y tipo de anotación en negrita, con contenido tratado como texto literal.
+- Estado y sesión preparados antes de mostrar la ventana; se conserva el estado normal o maximizado y se descarta la minimización al iniciar.
+- Iconos de lápiz y resaltado con indicador del color seleccionado.
+- Subrayado estándar PDF después de Resaltar, con color, grosor, indicador, persistencia, borrado, copia y deshacer/rehacer.
+
 ## 0.2.3 — 12 de octubre de 2026
 
 - Seleccionar permite mover comentarios dentro de la página y entre páginas, con desplazamiento en los bordes y un único paso de deshacer.

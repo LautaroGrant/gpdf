@@ -76,6 +76,7 @@ public:
     QVector<QRectF> selectionRects(int first, int last) const;
     QString selectionText(int first, int last) const;
     bool highlight(int first, int last, const QColor& color=QColor(255,210,50,153));
+    bool underline(int first,int last,const QColor& color=QColor(40,85,180),double width=1.5);
     bool note(QPointF point, const QString& text);
     bool freeText(QPointF point, const QString& text);
     bool freeText(QPointF point, const QString& text, const TextStyle& style);
@@ -125,6 +126,7 @@ private:
     void close();
     bool fail(const QString& message);
     bool canAddAnnotations() const;
+    bool textMarkup(int first,int last,const QColor& color,int type,double width);
     bool writeFreeText(FPDF_ANNOTATION annot, QPointF point, const QString& value, const TextStyle& style, bool* mutated=nullptr);
     FPDF_DOCUMENT doc_ = nullptr;
     FPDF_PAGE page_ = nullptr;

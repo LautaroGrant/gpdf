@@ -1,6 +1,8 @@
 # Arquitectura
 
 - `AppIdentity.h`: identidad heredada de almacenamiento e IPC para conservar los datos anteriores al renombrado.
+- `UiFont.h`: fuente Segoe UI de 10 puntos, compartida con las pruebas de interfaz; motor de fuentes predeterminado de Qt.
+- `WindowsIntegration.h`: registro por usuario de GPDF como opción para abrir PDF, sin modificar la elección predeterminada.
 - `main.cpp`: configuración y arranque, instancia única, argumentos y restauración inicial.
 - `Window.h`: coordinación de documentos, acciones, búsqueda, sesión y paneles.
 - `CommentPopup`: contenido de comentarios, seleccionable y de solo lectura, limitado a la región visible de la página.
@@ -10,7 +12,7 @@
 - `SessionStore`: lectura, guardado atómico del manifiesto y limpieza posterior de respaldos.
 - `AnnotationExport`: formato y escritura de resúmenes, separado de la validación de destinos de la ventana.
 - `Translations.cpp`: instalación de traducciones, compilada en gpdf_ui.
-- `PdfDocument`: acceso a PDFium, persistencia, historial y cachés de texto/anotaciones.
+- `PdfDocument`: acceso a PDFium, persistencia, historial y cachés de texto/anotaciones. Highlight y Underline nuevos no guardan cuerpos de comentario; sus fragmentos se extraen del texto para el panel/exportación. Underline utiliza una apariencia explícita para mantener color y grosor en otros lectores.
 - `SingleInstance`: elección de instancia y transmisión de rutas por IPC local.
 
 Los componentes de interfaz mantienen métodos inline por ahora para conservar el comportamiento durante la extracción. Window sigue siendo el componente mayor; la persistencia de sesión y el formato de exportación tienen implementaciones independientes. La coordinación de búsqueda aún permanece en Window.

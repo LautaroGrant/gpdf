@@ -1,0 +1,3 @@
+// Keep application first (Explorer executable icon), document second.
+1 ICON "icons/gpdf.ico"
+2 ICON "icons/pdf-document.ico"
