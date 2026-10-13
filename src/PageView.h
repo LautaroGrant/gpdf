@@ -35,7 +35,21 @@ public:
     std::function<void(int)> annotationSelected;
     std::function<void(int)> navigate;
     std::function<void(int)> annotationMoved;
-    explicit PageView(PdfDocument& document) : pdf(document),cache(64*1024),previewCache(8*1024) { setMouseTracking(true); setFocusPolicy(Qt::StrongFocus); workers.setMaxThreadCount(2); }
+    explicit PageView(PdfDocument& document) : pdf(document),cache(64*1024),previewCache(8*1024) {
+        setMouseTracking(true); setFocusPolicy(Qt::StrongFocus); workers.setMaxThreadCount(2);
+        dragScroll=new QTimer(this); dragScroll->setInterval(40);
+        connect(dragScroll,&QTimer::timeout,this,[this]{
+            if(!draggingText || !dragIsComment) { dragScroll->stop(); return; }
+            QScrollArea* area=nullptr; for(auto parent=parentWidget();parent;parent=parent->parentWidget()) if((area=qobject_cast<QScrollArea*>(parent))) break;
+            if(!area) return;
+            auto point=area->viewport()->mapFromGlobal(QCursor::pos());
+            int direction=point.y()<35 ? -1 : point.y()>area->viewport()->height()-35 ? 1 : 0;
+            if(!direction || point.x()<0 || point.x()>area->viewport()->width()) { dragEdgeTicks=0; return; }
+            auto bar=area->verticalScrollBar(); int before=bar->value(); bar->setValue(before+direction*18);
+            if(mode!=Continuous && bar->value()==before && ++dragEdgeTicks>=15) { dragEdgeTicks=0; if(navigate) navigate(direction); }
+            dragOffset=mapFromGlobal(QCursor::pos())-dragStart; update();
+        });
+    }
     QThreadPool workers;
     void shutdownWorkers() { workers.clear(); workers.waitForDone(); }
     ~PageView() override { shutdownWorkers(); qApp->removeEventFilter(this); }
@@ -126,7 +140,7 @@ public:
         beginText({draft["x"].toDouble(),draft["y"].toDouble()},draft["index"].toInt(-1));
         if(textInput) textInput->setPlainText(draft["text"].toString());
     }
-    void newDocument() { invalidateCache(); resetSelection(); searchPage=-1; searchRects.clear(); sizes.clear(); for(int i=0;i<pdf.pageCount();++i) sizes.append(pdf.pageSize(i)); }
+    void newDocument() { draggingText=dragCandidate=false; invalidateCache(); resetSelection(); searchPage=-1; searchRects.clear(); sizes.clear(); for(int i=0;i<pdf.pageCount();++i) sizes.append(pdf.pageSize(i)); }
     void refresh() {
         hideComment();
         invalidateCache(pdf.pageIndex(),true);
@@ -194,7 +208,9 @@ public:
         available=available.intersected(activeRect().toAlignedRect());
         commentPopup->showContents(pdf.annotationContents(index),deviceRect(pdf.annotationRect(index)).toAlignedRect(),available);
     }
-    void resetSelection() { hideComment(); first=last=selectedAnnotation=-1; allTextSelected=false; stroke.clear(); }
+    bool annotationDragging() const { return draggingText; }
+    void cancelAnnotationDrag() { draggingText=dragCandidate=false; dragScroll->stop(); dragOffset={}; unsetCursor(); update(); }
+    void resetSelection(bool preserveDrag=false) { if(!preserveDrag) cancelAnnotationDrag(); hideComment(); first=last=selectedAnnotation=-1; allTextSelected=false; stroke.clear(); }
     int pageAt(QPointF point) const { for(int i=0;i<pageRects.size();++i) if(!pageRects[i].isEmpty() && pageRects[i].contains(point)) return i; return -1; }
     QRectF activeRect() const { return pdf.pageIndex()<pageRects.size() ? pageRects[pdf.pageIndex()] : QRectF(); }
     QPointF pdfPoint(QPointF point) const {
@@ -215,7 +231,7 @@ public:
     void activate(int index) {
         if(index<0 || index==pdf.pageIndex()) return;
         if(!finishText()) return;
-        if(pdf.setPage(index)) { resetSelection(); if(fit!=Manual) { invalidateCache(-1,true); rebuild(); } if(activated) activated(index); update(); }
+        if(pdf.setPage(index)) { resetSelection(true); if(fit!=Manual) { invalidateCache(-1,true); rebuild(); } if(activated) activated(index); update(); }
     }
 protected:
     bool eventFilter(QObject* target,QEvent* event) override {
@@ -289,7 +305,10 @@ protected:
             painter.setBrush(QColor(255,180,30,110)); painter.setPen(QPen(QColor("#d97706"),1));
             for(auto r:searchRects) painter.drawRect(deviceRect(r).adjusted(-1,-1,1,1));
         }
-        if(selectedAnnotation>=0) {
+        if(draggingText) {
+            painter.setBrush(Qt::NoBrush); painter.setPen(QPen(QColor("#2563eb"),1.5,Qt::DashLine));
+            painter.drawRect(dragOutline.translated(dragOffset).adjusted(-3,-3,3,3));
+        } else if(selectedAnnotation>=0) {
             painter.setBrush(Qt::NoBrush); painter.setPen(QPen(QColor("#2563eb"),1.5,Qt::DashLine));
             auto outline=deviceRect(pdf.annotationRect(selectedAnnotation));
             if(draggingText) outline.translate(dragOffset);
@@ -311,7 +330,7 @@ protected:
             showComment(hit); update(); return;
         }
         if(tool==Eraser) { eraseAt(event->position()); return; }
-        if(tool==Select) { searchPage=-1; searchRects.clear(); selectedAnnotation=hit; if(annotationSelected) annotationSelected(hit); first=last=hit>=0 ? -1 : pdf.characterAt(p); dragStart=event->position(); dragOffset={}; draggingText=false; dragCandidate=hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_FREETEXT && pdf.canEditAnnotation(hit); showComment(hit); update(); }
+        if(tool==Select) { searchPage=-1; searchRects.clear(); selectedAnnotation=hit; if(annotationSelected) annotationSelected(hit); first=last=hit>=0 ? -1 : pdf.characterAt(p); dragStart=event->position(); dragOffset={}; draggingText=false; dragCandidate=hit>=0 && (pdf.annotationType(hit)==FPDF_ANNOT_FREETEXT || pdf.annotationType(hit)==FPDF_ANNOT_TEXT) && pdf.canEditAnnotation(hit); if(dragCandidate) { dragPage=pdf.pageIndex(); dragIndex=hit; dragRevision=pdf.revision(); dragIsComment=pdf.annotationType(hit)==FPDF_ANNOT_TEXT; auto rect=pdf.annotationRect(hit); dragAnchor=p-QPointF(rect.left(),rect.bottom()); dragOutline=deviceRect(rect); } showComment(hit); update(); }
         else if(tool==Pen) { stroke={p}; update(); }
         else if(tool==Text) {
             beginText(p,hit);
@@ -342,10 +361,10 @@ protected:
         }
         if(!(event->buttons() & Qt::LeftButton) || !pdf.loaded()) return;
         if(tool==Eraser) { eraseAt(event->position()); return; }
-        if(tool==Select && dragCandidate && selectedAnnotation>=0) {
+        if(tool==Select && dragCandidate) {
             dragOffset=event->position()-dragStart;
             if(dragOffset.manhattanLength()>=QApplication::startDragDistance()) draggingText=true;
-            if(draggingText) { setCursor(Qt::SizeAllCursor); update(); } return;
+            if(draggingText) { hideComment(); if(dragIsComment) dragScroll->start(); setCursor(Qt::SizeAllCursor); update(); } return;
         }
         auto p=pdfPoint(event->position());
         if(tool==Select && first>=0) { int index=pdf.characterAt(p); if(index>=0) last=index; }
@@ -355,7 +374,14 @@ protected:
     void leaveEvent(QEvent*) override { unsetCursor(); }
     void mouseReleaseEvent(QMouseEvent* event) override {
         if(event->button()!=Qt::LeftButton) return;
-        if(draggingText && selectedAnnotation>=0) {
+        if(draggingText && dragIsComment && pdf.revision()==dragRevision) {
+            int destination=pageAt(event->position());
+            if(destination>=0) {
+                int moved=pdf.moveCommentAnnotation(dragPage,dragIndex,destination,pdfPointOnPage(destination,event->position())-dragAnchor);
+                if(moved<0) { if(report) report(pdf.error()); }
+                else { selectedAnnotation=moved; draggingText=dragCandidate=false; invalidateCache(); if(annotationMoved) annotationMoved(moved); }
+            }
+        } else if(draggingText && selectedAnnotation>=0 && pdf.revision()==dragRevision) {
             int index=selectedAnnotation; auto rect=pdf.annotationRect(index);
             QPointF delta=pdfPoint(dragStart+dragOffset)-pdfPoint(dragStart);
             QPointF target(rect.left()+delta.x(),rect.bottom()+delta.y());
@@ -363,6 +389,7 @@ protected:
             else if(annotationMoved) annotationMoved(index);
         }
         draggingText=dragCandidate=false; dragOffset={};
+        dragScroll->stop(); dragEdgeTicks=0;
         setCursor(tool==Pen || tool==Note || tool==Eraser ? Qt::CrossCursor : tool==Text ? Qt::IBeamCursor : Qt::ArrowCursor);
         if(tool==Pen && stroke.size()>1) { if(!pdf.ink(stroke,penColor,penWidth)) report(pdf.error()); else changed(); }
         stroke.clear(); update();
@@ -380,6 +407,13 @@ protected:
 private:
     CommentPopup* commentPopup=nullptr;
     bool draggingText=false,dragCandidate=false;
+    bool dragIsComment=false;
+    QTimer* dragScroll=nullptr;
+    int dragEdgeTicks=0;
+    int dragPage=-1,dragIndex=-1;
+    quint64 dragRevision=0;
+    QPointF dragAnchor;
+    QRectF dragOutline;
     QPointF dragStart,dragOffset;
     int annotationAt(QPointF point) const {
         int drawing=pdf.drawingAt(point,4/effectiveScale);

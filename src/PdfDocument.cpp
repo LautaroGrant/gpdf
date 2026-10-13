@@ -159,6 +159,47 @@ QString PdfDocument::pageText(int index) const { std::lock_guard apiGuard(pdfium
     FPDF_ClosePage(page); return result;
 }
 int PdfDocument::characterCount() const { std::lock_guard apiGuard(pdfiumMutex); return text_ ? FPDFText_CountChars(text_) : 0; }
+int PdfDocument::moveCommentAnnotation(int sourcePage,int index,int destinationPage,QPointF topLeft) {
+    std::lock_guard apiGuard(pdfiumMutex);
+    const int originalPage=index_;
+    if(sourcePage<0 || sourcePage>=pageCount() || destinationPage<0 || destinationPage>=pageCount()) { fail("La página de destino no existe."); return -1; }
+    if(!setPage(sourcePage)) return -1;
+    if(annotationType(index)!=FPDF_ANNOT_TEXT || !canEditAnnotation(index)) { setPage(originalPage); fail("Seleccioná un comentario editable."); return -1; }
+    auto source=FPDFPage_GetAnnot(page_,index);
+    FS_RECTF previous{}; FPDFAnnot_GetRect(source,&previous);
+    const float width=previous.right-previous.left,height=previous.top-previous.bottom;
+    const auto size=pageSize(destinationPage);
+    if(width>size.width() || height>size.height()) { FPDFPage_CloseAnnot(source); setPage(originalPage); fail("El comentario no cabe en la página de destino."); return -1; }
+    topLeft.setX(std::clamp(topLeft.x(),0.0,size.width()-width));
+    topLeft.setY(std::clamp(topLeft.y(),double(height),size.height()));
+    FS_RECTF target{float(topLeft.x()),float(topLeft.y()),float(topLeft.x()+width),float(topLeft.y()-height)};
+    if(sourcePage==destinationPage) {
+        bool ok=FPDFAnnot_SetRect(source,&target); FPDFPage_CloseAnnot(source);
+        if(!ok) { setPage(originalPage); fail("No se pudo mover el comentario."); return -1; }
+        dirty_=true; recordHistory(); return index;
+    }
+    auto destination=FPDF_LoadPage(doc_,destinationPage);
+    auto moved=destination ? FPDFPage_CreateAnnot(destination,FPDF_ANNOT_TEXT) : nullptr;
+    bool ok=moved && FPDFAnnot_SetRect(moved,&target);
+    if(moved) {
+        ok=FPDFAnnot_SetFlags(moved,FPDFAnnot_GetFlags(source)) && ok;
+        unsigned int red,green,blue,alpha;
+        if(FPDFAnnot_GetColor(source,FPDFANNOT_COLORTYPE_Color,&red,&green,&blue,&alpha)) ok=FPDFAnnot_SetColor(moved,FPDFANNOT_COLORTYPE_Color,red,green,blue,alpha) && ok;
+        for(const char* key:{"Contents","T","Subj","Name","NM","M","CreationDate"}) {
+            auto length=FPDFAnnot_GetStringValue(source,key,nullptr,0);
+            if(length>2) { QVector<unsigned short> value(length/2); FPDFAnnot_GetStringValue(source,key,value.data(),length); ok=FPDFAnnot_SetStringValue(moved,key,value.data()) && ok; }
+        }
+        FPDFPage_CloseAnnot(moved);
+    }
+    FPDFPage_CloseAnnot(source);
+    const int result=destination ? FPDFPage_GetAnnotCount(destination)-1 : -1;
+    if(ok) ok=FPDFPage_RemoveAnnot(page_,index);
+    if(!ok && moved) FPDFPage_RemoveAnnot(destination,result);
+    if(destination) FPDF_ClosePage(destination);
+    if(!ok) { setPage(originalPage); fail("No se pudo mover el comentario."); return -1; }
+    annotationPages_.clear(); searchIndex_->clear(); hoverRegions_.clear();
+    setPage(destinationPage); dirty_=true; recordHistory(); return result;
+}
 bool PdfDocument::moveTextAnnotation(int index,QPointF topLeft) { std::lock_guard apiGuard(pdfiumMutex);
     if(annotationType(index)!=FPDF_ANNOT_FREETEXT || !canEditAnnotation(index)) return fail("Seleccioná un cuadro de texto editable.");
     auto annot=FPDFPage_GetAnnot(page_,index); auto rect=annotationRect(index); auto value=annotationContents(index); auto style=annotationTextStyle(index);

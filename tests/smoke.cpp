@@ -280,6 +280,21 @@ int main(int argc, char** argv) {
             require(!damaged.setPage(1) && damaged.pageIndex()==0 && damaged.annotationContents(0)=="Conservar" && damaged.render(1.0)==image && damaged.revision()==revision,"failed page load preserves active page, rendering and annotations");
             require(damaged.setPage(0) && damaged.undo() && damaged.annotationCount()==0,"same-page navigation and history remain usable after failed load");
         }
+        {
+            PdfDocument moved; require(moved.createSample(3) && moved.note({50,650},QString::fromUtf8("Comentario á\nsegunda línea")),"comment move fixture");
+            auto text=moved.annotationContents(0); auto color=moved.annotationColor(0); moved.documentAnnotations();
+            require(moved.moveCommentAnnotation(0,0,0,{100,600})==0 && moved.annotationRect(0).left()==100,"comment moves within a page");
+            require(moved.moveCommentAnnotation(0,0,2,{120,550})==0 && moved.pageIndex()==2 && moved.annotationContents(0)==text && moved.annotationColor(0)==color,"comment moves between pages preserving contents and color");
+            auto entries=moved.documentAnnotations(); require(entries.size()==1 && entries[0].page==2,"source and destination annotation caches update");
+            require(moved.undo() && moved.setPage(0) && moved.annotationCount()==1 && moved.annotationRect(0).left()==100 && moved.setPage(2) && moved.annotationCount()==0,"cross-page move is one undo step");
+            require(moved.redo() && moved.setPage(2) && moved.annotationContents(0)==text,"redo restores destination comment");
+            auto revision=moved.revision(); require(moved.moveCommentAnnotation(2,0,8,{0,0})<0 && moved.revision()==revision && moved.annotationCount()==1,"invalid move leaves comment and history intact");
+            require(moved.saveCopy(directory+"/moved-comment.pdf"),"save moved comment"); PdfDocument reopened;
+            require(reopened.open(directory+"/moved-comment.pdf") && reopened.setPage(0) && reopened.annotationCount()==0 && reopened.setPage(2) && reopened.annotationContents(0)==text,"moved comment persists on correct page");
+            auto locked=reopened.copyAnnotation(0); locked.flags|=FPDF_ANNOT_FLAG_LOCKED;
+            require(reopened.pasteAnnotation(locked,{200,500}),"locked comment fixture"); revision=reopened.revision();
+            require(reopened.moveCommentAnnotation(2,1,0,{50,600})<0 && reopened.revision()==revision && reopened.pageIndex()==2 && reopened.annotationCount()==2,"locked comment transfer is rejected without changing history");
+        }
         std::cout << "PASS: annotation creation, editing, colors, deletion, failure rollback and persistence.\n";
         return 0;
     } catch(const std::exception& e) { std::cerr << "FAIL: " << e.what() << '\n'; return 1; }

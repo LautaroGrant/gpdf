@@ -995,6 +995,48 @@ int main(int argc,char** argv) {
             require(!canvas->commentVisible(),"click outside the popup dismisses it");
             if(popupDark->isChecked()) popupDark->trigger();
         }
+        {
+            PdfDocument fixture; require(fixture.createSample(3) && fixture.note({70,650},"Mover comentario"),"drag comment fixture");
+            QString path=directory.path()+"/drag-comment.pdf"; require(fixture.saveCopy(path),"save drag fixture");
+            Window reader; reader.openDocument(path); reader.show(); app.processEvents();
+            PageView* canvas=nullptr; for(auto widget:reader.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) canvas=page;
+            auto modes=reader.findChild<QComboBox*>("viewMode"); auto number=reader.findChild<QSpinBox*>("pageNumber");
+            require(number && number->maximum()==3 && number->value()==1,"page field reflects document bounds");
+            auto pageInput=number->findChild<QLineEdit*>(); pageInput->setFocus(); pageInput->selectAll(); pageInput->setText("3");
+            QKeyEvent pageEnter(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier); QApplication::sendEvent(pageInput,&pageEnter);
+            require(canvas->pdf.pageIndex()==2 && number->value()==3,"typing a page and Enter navigates directly"); number->setValue(1);
+            for(int mode=0;mode<3;++mode) { modes->setCurrentIndex(mode); number->setValue(3); app.processEvents(); require(canvas->pdf.pageIndex()==2 && number->value()==3,"page field navigates in each view mode"); number->setValue(1); }
+            modes->setCurrentIndex(2); app.processEvents(); canvas->tool=PageView::Select;
+            auto start=canvas->devicePoint(canvas->pdf.annotationRect(0).center()); auto end=canvas->pageRects[1].center();
+            QMouseEvent press(QEvent::MouseButtonPress,start,canvas->mapToGlobal(start.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(canvas,&press);
+            QMouseEvent move(QEvent::MouseMove,end,canvas->mapToGlobal(end.toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(canvas,&move);
+            require(canvas->annotationDragging() && !canvas->commentVisible(),"comment drag hides its popup");
+            QMouseEvent release(QEvent::MouseButtonRelease,end,canvas->mapToGlobal(end.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(canvas,&release);
+            require(canvas->pdf.pageIndex()==1 && canvas->pdf.annotationContents(0)=="Mover comentario" && number->value()==2,"Select drops comment on another page and updates page field");
+            require(canvas->pdf.undo() && canvas->pdf.setPage(0) && canvas->pdf.annotationCount()==1,"drag transfer undoes as one edit");
+            modes->setCurrentIndex(0); number->setValue(1); app.processEvents();
+            start=canvas->devicePoint(canvas->pdf.annotationRect(0).center()); end=canvas->pageRects[2].center();
+            QMouseEvent continuousPress(QEvent::MouseButtonPress,start,canvas->mapToGlobal(start.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(canvas,&continuousPress);
+            QMouseEvent continuousMove(QEvent::MouseMove,end,canvas->mapToGlobal(end.toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(canvas,&continuousMove);
+            canvas->activate(2);
+            QMouseEvent continuousRelease(QEvent::MouseButtonRelease,end,canvas->mapToGlobal(end.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(canvas,&continuousRelease);
+            require(canvas->pdf.pageIndex()==2 && canvas->pdf.annotationContents(0)=="Mover comentario","continuous drag survives active page change while scrolling");
+            require(canvas->pdf.undo() && canvas->pdf.setPage(0),"undo continuous drag");
+            auto find=reader.findChild<QAction*>("focusSearch"); require(find->shortcut()==QKeySequence("Ctrl+B") && find->property("defaultShortcut").toString()=="Ctrl+B","Spanish search shortcut and restored default");
+            auto search=reader.findChild<QAction*>("searchAction"); search->setChecked(false); canvas->setFocus();
+            QKeyEvent searchKey(QEvent::KeyPress,Qt::Key_B,Qt::ControlModifier); QApplication::sendEvent(canvas,&searchKey); require(search->isChecked(),"Ctrl+B opens search panel");
+            reader.openDocument(directory.path()+"/ui.pdf"); app.processEvents(); auto tabs=reader.findChild<QTabBar*>("documentTabs"); require(tabs->count()==2,"middle close fixture has two documents");
+            auto point=tabs->tabRect(1).center();
+            QMouseEvent down(QEvent::MouseButtonPress,point,tabs->mapToGlobal(point),Qt::MiddleButton,Qt::MiddleButton,Qt::NoModifier); QApplication::sendEvent(tabs,&down);
+            QMouseEvent up(QEvent::MouseButtonRelease,point,tabs->mapToGlobal(point),Qt::MiddleButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(tabs,&up);
+            require(tabs->count()==1,"middle button closes document tab");
+            require(canvas->pdf.note({100,500},"Sin guardar"),"unsaved middle close fixture");
+            reader.openDocument(directory.path()+"/ui.pdf"); app.processEvents(); require(tabs->count()==2,"unsaved tab remains alongside second document");
+            QTimer dismiss; bool prompted=false; QObject::connect(&dismiss,&QTimer::timeout,[&]{ for(auto widget:QApplication::topLevelWidgets()) if(auto box=qobject_cast<QMessageBox*>(widget)) if(auto cancel=box->button(QMessageBox::Cancel)) { prompted=true; cancel->click(); } }); dismiss.start(0);
+            point=tabs->tabRect(0).center(); QMouseEvent dirtyDown(QEvent::MouseButtonPress,point,tabs->mapToGlobal(point),Qt::MiddleButton,Qt::MiddleButton,Qt::NoModifier); QApplication::sendEvent(tabs,&dirtyDown);
+            QMouseEvent dirtyUp(QEvent::MouseButtonRelease,point,tabs->mapToGlobal(point),Qt::MiddleButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(tabs,&dirtyUp); dismiss.stop();
+            require(prompted && tabs->count()==2 && canvas->pdf.dirty(),"Cancel retains unsaved tab after middle close");
+        }
         std::cout << "PASS: three view modes, scroll, paired navigation, correct-page annotations, editing and deletion.\n";
         return 0;
     } catch(const std::exception& e) { std::cerr << "FAIL: " << e.what() << '\n'; return 1; }

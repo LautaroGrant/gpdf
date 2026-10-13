@@ -1,5 +1,12 @@
 # Cambios
 
+## 0.2.3 — 12 de octubre de 2026
+
+- Seleccionar permite mover comentarios dentro de la página y entre páginas, con desplazamiento en los bordes y un único paso de deshacer.
+- Clic central sobre una pestaña para cerrar el documento, conservando el aviso de cambios sin guardar.
+- Búsqueda predeterminada con Ctrl+B; se migra el antiguo Ctrl+F y se conservan los atajos personalizados.
+- Campo editable de página actual con navegación directa por número y Enter.
+
 ## 0.2.2 — 12 de octubre de 2026
 
 - Abrir un PDF desde otra instancia restaura la ventana maximizada o normal sin perder el estado anterior.

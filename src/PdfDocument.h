@@ -24,6 +24,7 @@ public:
     QVector<QPair<QString,QString>> properties() const;
     int characterCount() const;
     bool moveTextAnnotation(int index,QPointF topLeft);
+    int moveCommentAnnotation(int sourcePage,int index,int destinationPage,QPointF topLeft);
     bool canUndo() const { return historyPosition_>0; }
     bool canRedo() const { return historyPosition_+1<history_.size(); }
     bool undo();

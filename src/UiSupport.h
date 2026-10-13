@@ -97,6 +97,23 @@
 
 #ifdef Q_OS_WIN
 // Disable only this window's transition animation while Qt restores its native frame.
+class DocumentTabBar : public QTabBar {
+protected:
+    void mousePressEvent(QMouseEvent* event) override {
+        if(event->button()==Qt::MiddleButton) { middleTab=tabAt(event->position().toPoint()); event->accept(); return; }
+        QTabBar::mousePressEvent(event);
+    }
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        if(event->button()==Qt::MiddleButton) {
+            const int index=tabAt(event->position().toPoint());
+            if(index>=0 && index==middleTab) emit tabCloseRequested(index);
+            middleTab=-1; event->accept(); return;
+        }
+        QTabBar::mouseReleaseEvent(event);
+    }
+private:
+    int middleTab=-1;
+};
 class WindowTransitionsGuard {
     HWND hwnd; BOOL previous=FALSE; bool changed=false;
     using SetAttribute=HRESULT (WINAPI*)(HWND,DWORD,LPCVOID,DWORD);

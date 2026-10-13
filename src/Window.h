@@ -84,7 +84,7 @@ public:
         searchPanel->hide();
         setCentralWidget(splitter);
         documentToolbar=addToolBar("Documentos"); documentToolbar->setObjectName("documentToolbar"); documentToolbar->setMovable(false); documentToolbar->setFloatable(false); documentToolbar->setContextMenuPolicy(Qt::PreventContextMenu);
-        documentTabs=new QTabBar; documentTabs->setObjectName("documentTabs"); documentTabs->setTabsClosable(true); documentTabs->setExpanding(false); documentTabs->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+        documentTabs=new DocumentTabBar; documentTabs->setObjectName("documentTabs"); documentTabs->setTabsClosable(true); documentTabs->setExpanding(false); documentTabs->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
         documentToolbar->addWidget(documentTabs); documentToolbar->hide(); addToolBarBreak();
         connect(documentTabs,&QTabBar::currentChanged,[this](int index){ if(!changingTabs && index>=0) switchDocument(index); });
         connect(documentTabs,&QTabBar::tabCloseRequested,[this](int index){ if(switchDocument(index)) closeDocument(); });
@@ -110,7 +110,10 @@ public:
         connect(viewMode,&QComboBox::currentIndexChanged,[this](int index){ changeMode(PageView::Mode(index)); });
         bar->addSeparator();
         action("‹",[this]{ page(-1); });
-        pageLabel = new QLabel("  —  "); bar->addWidget(pageLabel);
+        auto pageIndicator=new QWidget; auto pageLayout=new QHBoxLayout(pageIndicator); pageLayout->setContentsMargins(0,0,0,0); pageLayout->setSpacing(3);
+        pageNumber=new QSpinBox; pageNumber->setObjectName("pageNumber"); pageNumber->setRange(1,1); pageNumber->setButtonSymbols(QAbstractSpinBox::NoButtons); pageNumber->setAlignment(Qt::AlignCenter); pageNumber->setFixedWidth(54); pageNumber->setKeyboardTracking(false); pageNumber->setToolTip("Página actual: escribí un número y presioná Enter para ir a esa página."); pageNumber->setAccessibleName("Página actual");
+        pageLabel=new QLabel("/ 0"); pageLayout->addWidget(pageNumber); pageLayout->addWidget(pageLabel); bar->addWidget(pageIndicator);
+        connect(pageNumber,&QSpinBox::valueChanged,[this](int value){ jumpTo(value-1); QSignalBlocker blocker(pageNumber); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); });
         action("›",[this]{ page(1); });
         bar->addSeparator();
         action("−",[this]{ zoom(-0.10); });
@@ -131,7 +134,7 @@ public:
         leftLayout->addWidget(separator("searchToolsSeparator"));
         searchAction->setToolTip("Buscar texto");
         auto focusSearch=new QAction(this); focusSearch->setObjectName("focusSearch");
-        focusSearch->setShortcut(QKeySequence::Find); addAction(focusSearch);
+        focusSearch->setShortcut(QKeySequence("Ctrl+B")); addAction(focusSearch);
         connect(focusSearch,&QAction::triggered,[this]{ searchAction->setChecked(!searchAction->isChecked()); if(searchAction->isChecked()) { searchInput->setFocus(); searchInput->selectAll(); } else view->setFocus(); });
         connect(searchAction,&QAction::toggled,[this](bool visible){
             searchPanel->setVisible(visible);
@@ -407,6 +410,7 @@ protected:
             }
         }
 #endif
+        if(view && object==this && (event->type()==QEvent::WindowDeactivate || event->type()==QEvent::Hide)) view->cancelAnnotationDrag();
         if(view && view->commentVisible() && (event->type()==QEvent::MouseButtonPress || event->type()==QEvent::MouseButtonDblClick)) {
             auto widget=qobject_cast<QWidget*>(object);
             if(widget && widget->window()==this && !view->commentContains(widget)) view->hideComment();
@@ -461,7 +465,7 @@ protected:
                     QString name=action->objectName();
                     bool inlineActive=view->findChild<QWidget*>("inlineTextEditor")!=nullptr;
                     if(name=="confirmTextAction" && (!inlineActive || QApplication::focusWidget()==searchInput)) continue;
-                    if(name=="cancelContextAction" && !inlineActive && !autoScrollTimer->isActive() && !view->commentVisible() && !isFullScreen()) continue;
+                    if(name=="cancelContextAction" && !inlineActive && !autoScrollTimer->isActive() && !view->annotationDragging() && !view->commentVisible() && !isFullScreen()) continue;
                     if(name=="searchEnterAction" && QApplication::focusWidget()!=searchInput) continue;
                     for(const auto& shortcut:action->shortcuts()) if(!shortcut.isEmpty() && shortcut==pressed) {
                         if(event->type()==QEvent::ShortcutOverride) key->accept(); else action->trigger();
@@ -1027,7 +1031,7 @@ private:
         extra("Documento siguiente","nextDocumentAction","Ctrl+Tab",[this]{ if(documents.size()>1) switchDocument((activeDocument+1)%int(documents.size())); });
         extra("Documento anterior","previousDocumentAction","Ctrl+Shift+Tab",[this]{ if(documents.size()>1) switchDocument((activeDocument+int(documents.size())-1)%int(documents.size())); });
         auto confirm=extra("Confirmar texto (durante edición)","confirmTextAction","Return",[this]{ view->finishText(); }); removeAction(confirm);
-        auto cancel=extra("Cancelar / detener / salir de pantalla completa","cancelContextAction","Esc",[this]{ if(autoScrollTimer->isActive()) stopAutoScroll(); else if(view->commentVisible()) view->hideComment(); else if(view->findChild<QWidget*>("inlineTextEditor")) view->cancelText(); else if(isFullScreen()) { setFullscreen(false); } }); removeAction(cancel);
+        auto cancel=extra("Cancelar / detener / salir de pantalla completa","cancelContextAction","Esc",[this]{ if(view->annotationDragging()) view->cancelAnnotationDrag(); else if(autoScrollTimer->isActive()) stopAutoScroll(); else if(view->commentVisible()) view->hideComment(); else if(view->findChild<QWidget*>("inlineTextEditor")) view->cancelText(); else if(isFullScreen()) { setFullscreen(false); } }); removeAction(cancel);
         auto enter=extra("Buscar / resultado siguiente (en Búsqueda)","searchEnterAction","Return",[this]{ searchEnter(); }); removeAction(enter);
         shortcutsMenu=new QMenu("&Atajos",this);
         auto configure=extra("Ver y modificar atajos…","configureShortcutsAction",{},[this]{ configureShortcuts(); }); shortcutsMenu->addAction(configure); shortcutMenuActions.append(configure);
@@ -1040,6 +1044,10 @@ private:
         // This old, invisible list action used to own F2. It must not compete with Comentario.
         settings.remove("editSelectedAnnotationAction");
         settings.remove("menuFindAction");
+        if(!settings.value("spanishSearchShortcutMigrated",false).toBool()) {
+            if(settings.value("focusSearch","Ctrl+F").toString()=="Ctrl+F") settings.setValue("focusSearch","Ctrl+B");
+            settings.setValue("spanishSearchShortcutMigrated",true);
+        }
         for(auto action:findChildren<QAction*>()) {
             auto name=action->objectName();
             if(action->text().trimmed().isEmpty() || name.isEmpty() || name.startsWith("recentFile") || name=="menuFindAction" || name=="searchAction" || action->isSeparator()) continue;
@@ -1218,6 +1226,7 @@ private:
     QPushButton* colorButton;
     QPushButton* deleteButton;
     QLabel* pageLabel;
+    QSpinBox* pageNumber;
     QSpinBox* zoomPercent;
     QString source;
     QComboBox* viewMode;
@@ -1432,7 +1441,7 @@ private:
         if(next<0 || next>=pdf.pageCount()) return;
         updatingView=true;
         if(pdf.setPage(next)) {
-            view->resetSelection(); refresh();
+            view->resetSelection(view->annotationDragging()); refresh();
             scroll->verticalScrollBar()->setValue(view->mode==PageView::Continuous ? int(view->activeRect().top()) : 0);
         }
         updatingView=false;
@@ -1549,10 +1558,8 @@ private:
             }
         }
         updateGoActions();
-        int start=pdf.pageIndex()/2*2;
-        pageLabel->setText(view->mode==PageView::Double && pdf.pageCount()>start+1 ?
-            QString("  %1–%2 / %3  ").arg(start+1).arg(start+2).arg(pdf.pageCount()) :
-            QString("  %1 / %2  ").arg(pdf.loaded() ? pdf.pageIndex()+1 : 0).arg(pdf.pageCount()));
+        { QSignalBlocker pageBlocker(pageNumber); pageNumber->setEnabled(pdf.loaded()); pageNumber->setRange(1,std::max(1,pdf.pageCount())); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); }
+        pageLabel->setText(QString("/ %1  ").arg(pdf.pageCount()));
         QSignalBlocker blocker(annotations);
         annotations->clear();
         auto entries=annotationsForPanel();
