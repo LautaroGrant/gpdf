@@ -219,15 +219,15 @@ public:
         return pdfPointOnPage(pdf.pageIndex(),point);
     }
     QPointF pdfPointOnPage(int index,QPointF point) const {
-        auto r=pageRects[index]; auto size=pdf.pageSize(index);
-        double x=(point.x()-r.left())/effectiveScale,y=(point.y()-r.top())/effectiveScale;
-        QPointF original=rotation==1 ? QPointF(y,size.height()-x) : rotation==2 ? QPointF(size.width()-x,size.height()-y) : rotation==3 ? QPointF(size.width()-y,x) : QPointF(x,y);
-        return {std::clamp(original.x(),0.0,size.width()),std::clamp(size.height()-original.y(),0.0,size.height())};
+        auto r=pageRects[index];
+        double x=(point.x()-r.left())/r.width(),y=(point.y()-r.top())/r.height();
+        QPointF original=rotation==1 ? QPointF(y,1-x) : rotation==2 ? QPointF(1-x,1-y) : rotation==3 ? QPointF(1-y,x) : QPointF(x,y);
+        return pdf.normalizedToPage(index,{std::clamp(original.x(),0.0,1.0),std::clamp(original.y(),0.0,1.0)});
     }
     QPointF devicePoint(QPointF point) const {
-        auto r=activeRect(); auto size=pdf.pageSize(); double x=point.x(),y=size.height()-point.y();
-        QPointF display=rotation==1 ? QPointF(size.height()-y,x) : rotation==2 ? QPointF(size.width()-x,size.height()-y) : rotation==3 ? QPointF(y,size.width()-x) : QPointF(x,y);
-        return r.topLeft()+display*effectiveScale;
+        auto r=activeRect(); auto normalized=pdf.pageToNormalized(pdf.pageIndex(),point); double x=normalized.x(),y=normalized.y();
+        QPointF display=rotation==1 ? QPointF(1-y,x) : rotation==2 ? QPointF(1-x,1-y) : rotation==3 ? QPointF(y,1-x) : QPointF(x,y);
+        return r.topLeft()+QPointF(display.x()*r.width(),display.y()*r.height());
     }
     QRectF deviceRect(QRectF r) const { return QRectF(devicePoint(r.topLeft()),devicePoint(r.bottomRight())).normalized(); }
     void activate(int index) {

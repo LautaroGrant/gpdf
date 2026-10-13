@@ -2,6 +2,8 @@
 
 ## 0.2.6 — 13 de octubre de 2026
 
+- Menú Ayuda al final de la barra nativa de Windows, con Acerca de GPDF y texto centrado de versión y autor.
+- Mensaje de recuperación en español neutro.
 - Subrayado estándar PDF con color, grosor e indicador en la barra; edición, borrado, copia y deshacer/rehacer.
 - Resaltados nuevos sin cuerpo de comentario; fragmentos disponibles en el panel y la exportación.
 - Español neutro, página y tipo de anotación en negrita e indicadores de color para lápiz y resaltado.

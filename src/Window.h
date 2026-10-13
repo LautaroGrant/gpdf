@@ -188,7 +188,7 @@ public:
         connect(scroll->verticalScrollBar(),&QScrollBar::valueChanged,[this](int){ view->hideComment(); if(!updatingView) lastSearchRow=-1; scrolling(); });
         view->changed=[this]{ refresh(view->tool==PageView::Eraser ? -1 : pdf.annotationCount()-1); }; view->report=[this](QString message){ error(message); };
         selectAnnotation(-1);
-        createFileActions(); createEditActions(); createViewActions(); createReadingActions(); createGoActions(); createShortcutActions(); updateToolTips(); installFileMenu();
+        createFileActions(); createEditActions(); createViewActions(); createReadingActions(); createGoActions(); createShortcutActions(); createHelpActions(); updateToolTips(); installFileMenu();
         autoScrollTimer=new QTimer(this); autoScrollTimer->setObjectName("autoScrollTimer"); autoScrollTimer->setInterval(16);
         connect(autoScrollTimer,&QTimer::timeout,this,[this]{
             int distance=QCursor::pos().y()-autoScrollOrigin.y();
@@ -309,7 +309,7 @@ public:
         QDir root(sessionDirectory()); auto manifest=SessionStore::read(root); if(manifest.isEmpty()) return;
         auto list=manifest["documents"].toArray(); if(list.isEmpty()) return;
         bool recovery=false; for(auto value:list) { auto item=value.toObject(); if(!item["backup"].toString().isEmpty() || !item["draft"].toObject().isEmpty()) recovery=true; }
-        bool recover=!recovery || QMessageBox::question(this,"Recuperar cambios","Hay cambios de la sesión anterior que no se guardaron. ¿Querés recuperarlos?",QMessageBox::Yes|QMessageBox::No,QMessageBox::Yes)==QMessageBox::Yes;
+        bool recover=!recovery || QMessageBox::question(this,"Recuperar cambios","Hay cambios de la sesión anterior que no se guardaron. ¿Desea recuperarlos?",QMessageBox::Yes|QMessageBox::No,QMessageBox::Yes)==QMessageBox::Yes;
         restoringSession=true; pendingRecoveryItems=QJsonArray(); QVector<QJsonObject> restored;
         QVector<int> originalIndexes; int manifestIndex=-1;
         for(auto value:list) {
@@ -394,7 +394,7 @@ protected:
         }
         if(nativeMenu && msg->message==WM_COMMAND && HIWORD(msg->wParam)==0 && msg->lParam==0) {
             UINT id=LOWORD(msg->wParam);
-            for(auto list:{goActions,shortcutMenuActions}) for(auto action:list) if(action->property("nativeCommand").toUInt()==id && action->isEnabled()) { action->trigger(); *result=0; return true; }
+            for(auto list:{goActions,shortcutMenuActions,helpActions}) for(auto action:list) if(action->property("nativeCommand").toUInt()==id && action->isEnabled()) { action->trigger(); *result=0; return true; }
         }
         if(nativeMenu && msg->message==WM_INITMENUPOPUP) { updateEditActions(); updateGoActions(); }
         return QMainWindow::nativeEvent(type,message,result);
@@ -611,7 +611,24 @@ private:
     static constexpr UINT viewCommandBase=0x7300;
     static constexpr UINT goCommandBase=0x7400;
     static constexpr UINT shortcutsCommandBase=0x7500;
+    static constexpr UINT helpCommandBase=0x7600;
 #endif
+    QMenu* helpMenu=nullptr;
+    QList<QAction*> helpActions;
+    void createHelpActions() {
+        helpMenu=new QMenu("&Ayuda",this); helpMenu->setObjectName("helpMenu");
+        auto action=helpMenu->addAction("Acerca de GPDF"); action->setObjectName("aboutGpdfAction");
+        helpActions.append(action); addAction(action);
+        connect(action,&QAction::triggered,this,[this]{
+            QDialog dialog(this); dialog.setObjectName("aboutGpdfDialog"); dialog.setWindowTitle("Acerca de GPDF"); dialog.resize(360,160);
+            auto layout=new QVBoxLayout(&dialog);
+            auto text=new QLabel(QString("Grant's PDF Reader versión %1\nCreado por Lautaro Grant").arg(GPDF_VERSION));
+            text->setObjectName("aboutGpdfText"); text->setAlignment(Qt::AlignCenter); layout->addWidget(text,1);
+            auto close=new QDialogButtonBox; close->addButton("Cerrar",QDialogButtonBox::AcceptRole); layout->addWidget(close);
+            connect(close,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+            dialog.exec();
+        });
+    }
     void createFileActions() {
         fileMenu=new QMenu("&Archivo",this);
         auto action=[this](QMenu* menu,const QString& title,const QString& name,auto handler,const QKeySequence& shortcut=QKeySequence()) {
@@ -880,7 +897,7 @@ private:
         }
     }
     QMenu* drawingMenu(bool pencil,QWidget* parent) {
-        auto menu=new QMenu(parent); auto panel=new QWidget; auto form=new QFormLayout(panel);
+        auto menu=new DownwardToolMenu(parent); auto panel=new QWidget; auto form=new QFormLayout(panel);
         auto colors=new QComboBox; colors->setObjectName(pencil ? "penColor" : "highlightColor");
         const QStringList names={"Negro","Azul","Rojo","Verde","Naranja","Amarillo","Violeta","Blanco"};
         const QStringList values={"#000000","#2855b4","#cc2244","#128012","#e88810","#ffd232","#8844cc","#ffffff"};
@@ -976,7 +993,7 @@ private:
             if(auto action=findChild<QAction*>(entry.first)) action->setIcon(QIcon(new GpdfToolIcon(entry.second.first,entry.second.second)));
     }
     QMenu* underlineMenu(QWidget* parent) {
-        auto menu=new QMenu(parent); auto panel=new QWidget; auto form=new QFormLayout(panel);
+        auto menu=new DownwardToolMenu(parent); auto panel=new QWidget; auto form=new QFormLayout(panel);
         auto colors=new QComboBox; colors->setObjectName("underlineColor");
         const QStringList names={"Negro","Azul","Rojo","Verde","Naranja","Amarillo","Violeta","Blanco"};
         const QStringList values={"#000000","#2855b4","#cc2244","#128012","#e88810","#ffd232","#8844cc","#ffffff"};
@@ -1129,6 +1146,7 @@ private:
             for(int i=0;i<viewActions.size();++i) viewActions[i]->setProperty("nativeCommand",viewCommandBase+UINT(i));
             for(int i=0;i<goActions.size();++i) goActions[i]->setProperty("nativeCommand",goCommandBase+UINT(i));
             for(int i=0;i<shortcutMenuActions.size();++i) shortcutMenuActions[i]->setProperty("nativeCommand",shortcutsCommandBase+UINT(i));
+            for(int i=0;i<helpActions.size();++i) helpActions[i]->setProperty("nativeCommand",helpCommandBase+UINT(i));
             std::function<HMENU(const QList<QAction*>&)> popupMenu=[&](const QList<QAction*>& actions)->HMENU {
                 HMENU popup=CreatePopupMenu(); if(!popup) return nullptr;
                 for(auto item:actions) {
@@ -1157,7 +1175,7 @@ private:
                 if(popup) DestroyMenu(popup);
                 ok=false;
             };
-            append(fileMenu->actions(),L"&Archivo"); append(viewMenu->actions(),L"&Ver"); append(editActions,L"&Editar"); append(goMenu->actions(),L"&Ir"); append(shortcutsMenu->actions(),L"&Atajos");
+            append(fileMenu->actions(),L"&Archivo"); append(viewMenu->actions(),L"&Ver"); append(editActions,L"&Editar"); append(goMenu->actions(),L"&Ir"); append(shortcutsMenu->actions(),L"&Atajos"); append(helpMenu->actions(),L"&Ayuda");
             HWND hwnd=reinterpret_cast<HWND>(winId());
             if(ok && SetMenu(hwnd,root)) { auto old=nativeMenu; nativeMenu=root; updateFileActions(); updateEditActions(); syncViewActions(); DrawMenuBar(hwnd); if(old) DestroyMenu(old); return; }
             if(root) DestroyMenu(root);
@@ -1168,7 +1186,7 @@ private:
         if(!menuBar()->actions().contains(fileMenu->menuAction())) {
             menuBar()->addMenu(fileMenu); menuBar()->addMenu(viewMenu);
             auto edit=menuBar()->addMenu("&Editar"); for(auto action:editActions) edit->addAction(action);
-            menuBar()->addMenu(goMenu); menuBar()->addMenu(shortcutsMenu);
+            menuBar()->addMenu(goMenu); menuBar()->addMenu(shortcutsMenu); menuBar()->addMenu(helpMenu);
         }
     }
     QTimer* autoScrollTimer=nullptr;

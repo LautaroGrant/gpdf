@@ -67,6 +67,8 @@ public:
     QImage render(double scale) const;
     QImage renderPage(int index, double scale) const;
     QSizeF pageSize(int index) const;
+    QPointF pageToNormalized(int index,QPointF point) const;
+    QPointF normalizedToPage(int index,QPointF point) const;
     int pageCount() const;
     int pageIndex() const { return index_; }
     QSizeF pageSize() const;

@@ -345,6 +345,24 @@ QSizeF PdfDocument::pageSize(int index) const { std::lock_guard apiGuard(pdfiumM
     FS_SIZEF size{};
     return doc_ && FPDF_GetPageSizeByIndexF(doc_,index,&size) ? QSizeF(size.width,size.height) : QSizeF();
 }
+QPointF PdfDocument::pageToNormalized(int index,QPointF point) const { std::lock_guard apiGuard(pdfiumMutex);
+    if(!doc_ || index<0 || index>=pageCount()) return {};
+    auto page=index==index_ ? page_ : FPDF_LoadPage(doc_,index);
+    if(!page) return {};
+    int x=0,y=0;
+    const bool ok=FPDF_PageToDevice(page,0,0,1000000,1000000,0,point.x(),point.y(),&x,&y);
+    if(index!=index_) FPDF_ClosePage(page);
+    return ok ? QPointF(x/1000000.0,y/1000000.0) : QPointF();
+}
+QPointF PdfDocument::normalizedToPage(int index,QPointF point) const { std::lock_guard apiGuard(pdfiumMutex);
+    if(!doc_ || index<0 || index>=pageCount()) return {};
+    auto page=index==index_ ? page_ : FPDF_LoadPage(doc_,index);
+    if(!page) return {};
+    double x=0,y=0;
+    const bool ok=FPDF_DeviceToPage(page,0,0,1000000,1000000,0,int(std::lround(point.x()*1000000)),int(std::lround(point.y()*1000000)),&x,&y);
+    if(index!=index_) FPDF_ClosePage(page);
+    return ok ? QPointF(x,y) : QPointF();
+}
 QImage PdfDocument::renderPage(int index,double scale) const { std::lock_guard apiGuard(pdfiumMutex);
     if(!doc_ || index<0 || index>=pageCount() || !std::isfinite(scale) || scale<=0) return {};
     if(index==index_) return render(scale);

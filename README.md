@@ -1,12 +1,12 @@
-# GPDF 0.2.5
+# GPDF 0.2.6
 
 GPDF (antes StudyPDF) es un lector de PDF para estudiar en Windows x64, construido con C++20, Qt Widgets y PDFium. Estado: beta local funcional.
 
 ## Ejecutar
 
-La distribución vigente es `dist/GPDF-0.2.5/GPDF.exe`. La carpeta completa debe mantenerse junto al ejecutable; no hace falta instalar Qt. `build-info.json` identifica versión, commit, estado del código y hashes de los binarios. Las distribuciones anteriores se conservan como referencia.
+El último build de prueba es `dist/GPDF-0.2.6-Downward-Menus/GPDF.exe`. Incluye los cambios locales posteriores al tag `v0.2.6`, todavía sin commit. La carpeta completa debe mantenerse junto al ejecutable; no hace falta instalar Qt. `build-info.json` identifica versión, commit de base, estado del código y hashes de los binarios. Las distribuciones anteriores se conservan como referencia.
 
-Abrí un PDF desde Inicio o Archivo. Abrir otro archivo agrega una pestaña. Windows permite asociar PDFs mediante «Abrir con». La aplicación reutiliza la instancia abierta y recupera su estado maximizado o normal al abrir PDFs desde el escritorio.
+Abrir un PDF desde Inicio o Archivo. Abrir otro archivo agrega una pestaña. Windows permite asociar PDFs mediante «Abrir con». La aplicación reutiliza la instancia abierta y recupera su estado maximizado o normal al abrir PDFs desde el escritorio.
 
 ## Funciones
 
@@ -18,11 +18,13 @@ Abrí un PDF desde Inicio o Archivo. Abrir otro archivo agrega una pestaña. Win
 - Exportación de anotaciones a Markdown, texto o HTML; impresión y vista previa.
 - Interfaz oscura con páginas blancas y atajos personalizables.
 
-Con Seleccionar, arrastrá el icono de un comentario para moverlo dentro de la página o a otra página. Acercalo al borde superior o inferior de la vista para desplazarte durante el arrastre; Esc cancela. El traslado conserva el contenido y permite deshacerlo en un solo paso.
+Con Seleccionar, arrastrar el icono de un comentario para moverlo dentro de la página o a otra página. Acercarlo al borde superior o inferior de la vista permite desplazarse durante el arrastre; Esc cancela. El traslado conserva el contenido y permite deshacerlo en un solo paso.
 
 Las anotaciones se guardan dentro del PDF. Los marcadores personales y el progreso son locales y se identifican por ruta. El cambio de nombre conserva la ubicación de configuración de StudyPDF para mantener preferencias, marcadores y recuperación. Guardar como adopta el nuevo archivo como documento actual.
 
 Los iconos de lápiz, resaltado y subrayado muestran el color seleccionado. Seleccionar texto y pulsar Subrayar; su menú desplegable permite elegir color y grosor (0,5–12 pt). La lista de anotaciones muestra página y tipo en negrita. El arranque restaura la ventana antes de mostrarla y evita abrirla minimizada.
+
+Los menús de colores de Lápiz, Resaltado y Subrayado se despliegan debajo de sus botones. La selección y la detección del cursor contemplan el recorte interno de las páginas y su rotación, evitando desplazamientos entre las letras y la marca de selección. Las pruebas incluyen páginas con recorte desplazado y las cuatro rotaciones de la vista.
 
 Los resaltados nuevos no incluyen texto de comentario ni una anotación de comentario adicional. El fragmento seleccionado se obtiene del PDF para la lista y la exportación. Los lectores externos pueden incluir resaltados en su panel general de anotaciones; los comentarios ya existentes se conservan.
 
@@ -51,7 +53,7 @@ En PowerShell, con Python 3.11+ para instalar las herramientas:
 
 ```powershell
 ./scripts/bootstrap.ps1
-./scripts/build.ps1 -Package -PackageName GPDF-0.2.5
+./scripts/build.ps1 -Package -PackageName GPDF-0.2.6
 ```
 
 Las dependencias se instalan en el proyecto. La compilación ejecuta tres suites: núcleo/persistencia, interfaz y corpus PDF. Las pruebas de interfaz usan Qt offscreen y necesitan acceso a archivos temporales e IPC local de Windows.
@@ -77,9 +79,21 @@ La compatibilidad de edición con Edge/Acrobat y la impresión física requieren
 
 La versión 0.2.6 utiliza Segoe UI de 10 pt y el motor de fuentes predeterminado de Qt. Incluye los iconos de aplicación y documento proporcionados por el usuario. Al ejecutar GPDF, se registra como opción para abrir PDF en la cuenta actual; no cambia el programa predeterminado. Para probar el icono de documentos, ejecutar primero el build desde su ubicación definitiva y seleccionar GPDF como aplicación predeterminada para PDF en Configuración de Windows. El icono de documentos está integrado en el ejecutable, separado del icono de aplicación.
 
+El último menú, Ayuda, incluye Acerca de GPDF con el nombre completo, la versión y el autor.
+
+```text
+Grant's PDF Reader versión 0.2.6
+Creado por Lautaro Grant
+```
+
+El paquete completo ocupa aproximadamente 46,3 MB (44,2 MiB), incluidas las bibliotecas y licencias. Las herramientas de desarrollo y los builds anteriores no son necesarios para utilizarlo. Las copias de recuperación y los documentos requieren espacio adicional variable.
+
 El repositorio Git es local, sin remoto configurado. `baseline-0.1` conserva el punto de partida. Fuentes y PDFs sintéticos se versionan; herramientas, compilaciones, paquetes y documentos personales quedan fuera del repositorio.
 
 - `docs/validation-0.2.4.md`: revisión del idioma, arranque, resaltados, subrayado e interfaz.
+- `docs/validation-0.2.6-help.md`: menú Ayuda, cuadro Acerca de GPDF y pruebas de archivos grandes.
+- `docs/validation-crop-selection.md`: corrección y pruebas de selección en páginas recortadas y rotadas.
+- `docs/validation-downward-menus.md`: comprobación de la posición de los menús de colores.
 - `docs/validation-icons.md`: verificación de iconos y restauración de la fuente original.
 - `docs/validation-0.2.5.md`: investigación y comparación del renderizado de Inter al 100 %.
 - `docs/architecture.md`: componentes y decisiones de concurrencia.

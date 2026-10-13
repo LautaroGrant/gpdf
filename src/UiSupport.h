@@ -133,6 +133,31 @@ public:
 };
 #endif
 
+// Keep drawing settings below their toolbar button instead of letting Qt
+// choose an upward popup position.
+class DownwardToolMenu : public QMenu {
+    QPointer<QWidget> anchor;
+public:
+    explicit DownwardToolMenu(QWidget* button):QMenu(button),anchor(button) {}
+protected:
+    void showEvent(QShowEvent* event) override {
+        QMenu::showEvent(event);
+        positionBelowButton();
+        // The Windows platform can adjust popup geometry after showEvent.
+        QTimer::singleShot(0,this,[this]{ if(isVisible()) positionBelowButton(); });
+    }
+private:
+    void positionBelowButton() {
+        if(!anchor) return;
+        auto position=anchor->mapToGlobal(QPoint(0,anchor->height()));
+        if(auto screen=anchor->screen()) {
+            auto available=screen->availableGeometry();
+            position.setX(std::clamp(position.x(),available.left(),std::max(available.left(),available.right()-width()+1)));
+        }
+        move(position);
+    }
+};
+
 class GpdfToolIcon : public QIconEngine {
     int tool;
     QColor drawingColor;

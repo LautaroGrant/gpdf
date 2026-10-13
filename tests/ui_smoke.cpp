@@ -95,6 +95,17 @@ int main(int argc,char** argv) {
             }
         };
         checkToolIcons(false);
+        app.processEvents();
+        for(const auto& name:{"editTool3","highlightAction","underlineAction"}) {
+            auto button=qobject_cast<QToolButton*>(iconToolbar->widgetForAction(window.findChild<QAction*>(name)));
+            require(button && button->menu(),"drawing settings dropdown exists");
+            auto expected=button->mapToGlobal(QPoint(0,button->height()));
+            // Deliberately request an upward position to exercise the override.
+            button->menu()->popup(expected-QPoint(0,400)); app.processEvents();
+            require(button->menu()->isVisible() && button->menu()->pos().y()==expected.y(),"pencil highlight and underline menus always open below their buttons");
+            if(!output.isEmpty()) button->menu()->grab().save(output+"/downward-"+QString(name)+".png");
+            button->menu()->hide();
+        }
         require(window.findChild<QAction*>("saveFileAction")->shortcut()==QKeySequence("Ctrl+G") && window.findChild<QAction*>("saveAsFileAction")->shortcut()==QKeySequence("Ctrl+Shift+G") && window.findChild<QAction*>("goPage")->shortcut()==QKeySequence("Ctrl+I"),"requested shortcuts migrate saved legacy assignments without conflicts");
         auto toolbarHost=window.findChild<QWidget*>("toolbarHost");
         require(toolbarHost,"toolbar available");
@@ -103,15 +114,64 @@ int main(int argc,char** argv) {
 #ifdef Q_OS_WIN
         if(QApplication::platformName()=="windows") {
             auto native=GetMenu(reinterpret_cast<HWND>(window.winId()));
-            require(native && GetMenuItemCount(native)==5,"native Archivo Ver and Editar menus attached");
+            require(native && GetMenuItemCount(native)==6,"native menus include Help as last menu");
+            wchar_t helpTitle[32]{}; GetMenuStringW(native,5,helpTitle,32,MF_BYPOSITION);
+            require(QString::fromWCharArray(helpTitle)=="&Ayuda","Help is the last native menu");
             auto popup=GetSubMenu(native,0);
             require(popup && GetMenuItemCount(popup)==14,"native file menu sections available");
         }
 #endif
         {
+            bool aboutShown=false;
+            QTimer::singleShot(0,[&]{ auto dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget()); if(!dialog) return;
+                auto text=dialog->findChild<QLabel*>("aboutGpdfText");
+                aboutShown=dialog->objectName()=="aboutGpdfDialog" && text && text->text()==QString("Grant's PDF Reader versión %1\nCreado por Lautaro Grant").arg(GPDF_VERSION) && text->alignment()==Qt::AlignCenter;
+                if(!output.isEmpty()) dialog->grab().save(output+"/about-gpdf.png"); dialog->accept();
+            });
+            auto action=window.findChild<QAction*>("aboutGpdfAction"); require(action,"About GPDF action exists");
+#ifdef Q_OS_WIN
+            if(QApplication::platformName()=="windows") SendMessageW(reinterpret_cast<HWND>(window.winId()),WM_COMMAND,action->property("nativeCommand").toUInt(),0);
+            else
+#endif
+                action->trigger();
+            require(aboutShown,"About dialog opens with centered name version and author");
+        }
+        {
             QDialogButtonBox translated(QDialogButtonBox::Save|QDialogButtonBox::Cancel|QDialogButtonBox::RestoreDefaults);
             require(translated.button(QDialogButtonBox::Save)->text().remove('&')=="Guardar" && translated.button(QDialogButtonBox::Cancel)->text().remove('&')=="Cancelar","standard Qt buttons translated into Spanish");
             QKeySequenceEdit shortcut; require(shortcut.findChild<QLineEdit*>()->placeholderText()=="Presionar un atajo","shortcut placeholder translated into neutral Spanish");
+        }
+        {
+            // Synthetic cropped pages, including an intrinsic PDF rotation.
+            QByteArray content="BT /F1 20 Tf 200 600 Td (Cropped selection alignment) Tj ET\n";
+            QList<QByteArray> objects={"<< /Type /Catalog /Pages 2 0 R >>","<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [100 200 500 750] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [100 200 500 750] /Rotate 90 /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>","<< /Length "+QByteArray::number(content.size())+" >>\nstream\n"+content+"endstream"};
+            QByteArray data="%PDF-1.4\n"; QList<int> offsets;
+            for(int i=0;i<objects.size();++i) { offsets.append(data.size()); data+=QByteArray::number(i+1)+" 0 obj\n"+objects[i]+"\nendobj\n"; }
+            int xref=data.size(); data+="xref\n0 7\n0000000000 65535 f \n";
+            for(int offset:offsets) data+=QByteArray::number(offset).rightJustified(10,'0')+" 00000 n \n";
+            data+="trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n"+QByteArray::number(xref)+"\n%%EOF\n";
+            QFile croppedFile(directory.path()+"/cropped.pdf"); require(croppedFile.open(QIODevice::WriteOnly) && croppedFile.write(data)==data.size(),"write cropped fixture"); croppedFile.close();
+            PdfDocument cropped; require(cropped.open(croppedFile.fileName()),"open cropped fixture");
+            auto origin=cropped.normalizedToPage(0,{0,0}); require(QLineF(origin,{100,750}).length()<0.002,"cropped visible origin includes CropBox offset");
+            PageView canvas(cropped); canvas.newDocument(); canvas.setViewportSize({800,850});
+            for(int page=0;page<2;++page) {
+                require(cropped.setPage(page),"activate cropped or intrinsically rotated page");
+                auto match=cropped.searchPage(page,"Cropped"); require(match.size()==1,"cropped text found");
+                auto pdfCenter=match.first().rectangles.first().center();
+                for(int turn=0;turn<4;++turn) {
+                    canvas.setRotation(turn);
+                    auto device=canvas.devicePoint(pdfCenter); auto back=canvas.pdfPoint(device);
+                    require(QLineF(pdfCenter,back).length()<0.003 && cropped.characterAt(back)>=match.first().first,"cropped selection point follows rendering and both rotations");
+                }
+                auto image=cropped.render(1); auto normalized=cropped.pageToNormalized(page,pdfCenter);
+                auto rect=match.first().rectangles.first(); auto a=cropped.pageToNormalized(page,rect.topLeft()),b=cropped.pageToNormalized(page,rect.bottomRight());
+                QRect pixels(QPoint(int(a.x()*image.width()),int(a.y()*image.height())),QPoint(int(b.x()*image.width()),int(b.y()*image.height()))); pixels=pixels.normalized().intersected(image.rect()); int dark=0;
+                for(int y=pixels.top();y<=pixels.bottom();++y) for(int x=pixels.left();x<=pixels.right();++x) if(image.pixelColor(x,y).lightness()<100) ++dark;
+                require(dark>50 && normalized.x()>0 && normalized.y()>0,"cropped selection rectangle covers rendered glyphs");
+            }
         }
         window.loadPath(fixture);
         app.processEvents();
