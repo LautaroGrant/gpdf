@@ -1,6 +1,22 @@
 # Cambios
 
+## 0.2.7 — 13 de octubre de 2026
+
+- Primera release pública; versión actualizada del programa, paquete portable e instalador.
+
 ## 0.2.6 — 13 de octubre de 2026
+
+- Doble clic para seleccionar palabras y triple clic para seleccionar el renglón visual, con tildes, apóstrofes, recorte y rotación.
+
+- Subrayado separado del texto; miniaturas con navegación por teclado y mouse; marcadores personales con botón Añadir y selección persistente para renombrar o borrar.
+- Enter avanza desde un resultado de búsqueda seleccionado y vuelve al primero al terminar.
+- Caché de cursor limitada a 2 MiB, miniaturas limitadas a 140×190 píxeles, exportación por partes y conservación de imágenes y modelos válidos al navegar.
+- Revisión de textos en español e inglés y restauración del filtro de subrayados entre sesiones.
+
+- Pestañas de documentos limitadas a 240 píxeles, con elipsis y ruta completa en el tooltip.
+- Búsqueda y paneles de navegación muestran su estado abierto/cerrado en el menú Ver.
+- Atajos predeterminados adaptados a inglés; Ctrl+N para anotaciones y Ctrl+U para subrayar en ambos idiomas, conservando personalizaciones.
+- Instalador con inglés predeterminado y selección de carpeta también en actualizaciones.
 
 - Menú Ayuda al final de la barra nativa de Windows, con Acerca de GPDF y texto centrado de versión y autor.
 - Mensaje de recuperación en español neutro.

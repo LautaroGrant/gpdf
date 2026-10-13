@@ -1,4 +1,5 @@
 #include "CommentPopup.h"
+#include "Translations.h"
 #include <QTextEdit>
 #include <QTextDocument>
 #include <QLabel>
@@ -14,10 +15,10 @@ CommentPopup::CommentPopup(QWidget* parent):QFrame(parent) {
     setAutoFillBackground(true);
     auto layout=new QVBoxLayout(this); layout->setContentsMargins(8,8,8,8); layout->setSpacing(6);
     auto header=new QHBoxLayout;
-    auto title=new QLabel("Comentario"); auto font=title->font(); font.setBold(true); title->setFont(font);
+    auto title=new QLabel(gpdfTr("Comentario")); auto font=title->font(); font.setBold(true); title->setFont(font);
     header->addWidget(title); header->addStretch();
     auto close=new QToolButton; close->setText("×"); close->setObjectName("closeCommentPopup");
-    close->setToolTip("Cerrar comentario (Esc)"); close->setAccessibleName("Cerrar comentario"); close->setFixedSize(22,22);
+    close->setToolTip(gpdfTr("Cerrar comentario (Esc)")); close->setAccessibleName(gpdfTr("Cerrar comentario")); close->setFixedSize(22,22);
     connect(close,&QToolButton::clicked,this,&QWidget::hide); header->addWidget(close); layout->addLayout(header);
     contents=new QTextEdit; contents->setObjectName("commentContents"); contents->setReadOnly(true);
     contents->setFrameShape(QFrame::NoFrame); contents->setAcceptRichText(false);
@@ -29,7 +30,7 @@ void CommentPopup::showContents(const QString& text,const QRect& anchor,const QR
     const auto bounds=available.adjusted(8,8,-8,-8);
     if(bounds.width()<100 || bounds.height()<75) { hide(); return; }
     const int width=std::min(320,bounds.width());
-    contents->setPlainText(text.isEmpty() ? "[Sin comentario escrito]" : text);
+    contents->setPlainText(text.isEmpty() ? gpdfTr("[Sin comentario escrito]") : text);
     contents->document()->setTextWidth(width-24);
     const int textHeight=std::clamp(int(std::ceil(contents->document()->size().height()))+8,42,170);
     const int height=std::min(textHeight+50,bounds.height());

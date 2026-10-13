@@ -7,7 +7,7 @@ try {
     python -m pip install --target .tools/python aqtinstall==3.3.0 cmake==4.4.4 ninja==1.13.2
     if ($LASTEXITCODE) { throw 'Falló la descarga de herramientas.' }
     $env:PYTHONPATH = "$root/.tools/python"
-    python -m aqt install-qt windows desktop 6.8.3 win64_mingw -O .tools/Qt --archives qtbase
+    python -m aqt install-qt windows desktop 6.8.3 win64_mingw -O .tools/Qt --archives qtbase qttools
     if ($LASTEXITCODE) { throw 'Falló la descarga de Qt.' }
     python -m aqt install-tool windows desktop tools_mingw1310 qt.tools.win64_mingw1310 -O .tools/Qt
     if ($LASTEXITCODE) { throw 'Falló la descarga de MinGW.' }

@@ -9,13 +9,18 @@ int main(int argc,char** argv) {
     app.setApplicationVersion(GPDF_VERSION);
     app.setWindowIcon(QIcon(":/icons/gpdf.png"));
     app.setStyle("Fusion");
-    installSpanishTranslations();
+    const auto initialArguments=app.arguments();
+    for(const auto& argument:initialArguments) if(argument.startsWith("--initial-language=")) {
+        if(!initializeUiLanguage(argument.mid(19))) return 1;
+    }
+    if(initialArguments.contains("--initialize-language-only")) return 0;
+    installUiTranslations();
     app.setFont(gpdfUiFont());
     const auto arguments=app.arguments();
     const bool snapshot=arguments.size()==4 && arguments[2]=="--snapshot";
     if(!snapshot) registerPdfApplication();
     QStringList paths;
-    for(int i=1;i<arguments.size();++i) { if(arguments[i]=="--snapshot") break; paths.append(QFileInfo(arguments[i]).absoluteFilePath()); }
+    for(int i=1;i<arguments.size();++i) { if(arguments[i]=="--snapshot") break; if(arguments[i].startsWith("--initial-language=")) continue; paths.append(QFileInfo(arguments[i]).absoluteFilePath()); }
     QString identity=qEnvironmentVariable("USERPROFILE",QDir::homePath());
     SingleInstance instance(QString::fromLatin1(AppIdentity::instancePrefix)+QString::fromLatin1(QCryptographicHash::hash(identity.toUtf8(),QCryptographicHash::Sha256).toHex().left(20)));
 #ifdef Q_OS_WIN
@@ -24,7 +29,7 @@ int main(int argc,char** argv) {
     if(!snapshot) {
         auto result=instance.start(paths);
         if(result==SingleInstance::Forwarded) return 0;
-        if(result==SingleInstance::Failed) { QMessageBox::warning(nullptr,"GPDF","No se pudo comunicar con la instancia abierta. Volver a intentar abrir el documento."); return 1; }
+        if(result==SingleInstance::Failed) { QMessageBox::warning(nullptr,"GPDF",gpdfTr("No se pudo comunicar con la instancia abierta. Volver a intentar abrir el documento.")); return 1; }
     }
     Window window;
     bool startupReady=false; QStringList pendingLaunches;

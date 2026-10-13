@@ -99,6 +99,11 @@
 // Disable only this window's transition animation while Qt restores its native frame.
 class DocumentTabBar : public QTabBar {
 protected:
+    QSize tabSizeHint(int index) const override {
+        auto size=QTabBar::tabSizeHint(index);
+        size.setWidth(qMin(size.width(),240));
+        return size;
+    }
     void mousePressEvent(QMouseEvent* event) override {
         if(event->button()==Qt::MiddleButton) { middleTab=tabAt(event->position().toPoint()); event->accept(); return; }
         QTabBar::mousePressEvent(event);
@@ -190,7 +195,7 @@ public:
 class GpdfCommentDialog : public QInputDialog {
 public:
     explicit GpdfCommentDialog(QWidget* parent,const QString& title,const QString& contents):QInputDialog(parent) {
-        setWindowTitle(title); setLabelText("Texto (Enter para guardar, Shift+Enter para nueva línea):");
+        setWindowTitle(title); setLabelText(gpdfTr("Texto (Enter para guardar, Shift+Enter para nueva línea):"));
         setOption(QInputDialog::UsePlainTextEditForTextInput); setInputMode(QInputDialog::TextInput); setTextValue(contents);
         qApp->installEventFilter(this);
     }
@@ -211,7 +216,6 @@ static QString studyMultilineText(QWidget* parent,const QString& title,const QSt
     return dialog.textValue();
 }
 
-void installSpanishTranslations();
 
 class SearchResultDelegate : public QStyledItemDelegate {
     mutable QCache<QString,QSize> hintCache{4*1024};
@@ -257,7 +261,7 @@ class TextResizeGrip : public QWidget {
     QSize original;
     QWidget* target;
 public:
-    explicit TextResizeGrip(QWidget* parent):QWidget(parent),target(parent) { setMouseTracking(true); setFixedSize(16,16); setCursor(Qt::SizeFDiagCursor); setToolTip("Arrastrar para ampliar o reducir el recuadro"); }
+    explicit TextResizeGrip(QWidget* parent):QWidget(parent),target(parent) { setMouseTracking(true); setFixedSize(16,16); setCursor(Qt::SizeFDiagCursor); setToolTip(gpdfTr("Arrastrar para ampliar o reducir el recuadro")); }
 protected:
     void paintEvent(QPaintEvent*) override { QPainter p(this); p.setPen(QColor("#788694")); for(int i=4;i<=12;i+=4) p.drawLine(i,14,14,i); }
     void mousePressEvent(QMouseEvent* e) override { start=e->globalPosition().toPoint(); original=target->size(); e->accept(); }

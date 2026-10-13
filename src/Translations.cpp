@@ -1,4 +1,6 @@
 #include "UiSupport.h"
+#include "Translations.h"
+namespace { QString activeLanguage; }
 class SpanishUiFallback : public QTranslator {
 public:
     using QTranslator::QTranslator;
@@ -8,9 +10,29 @@ public:
         return {};
     }
 };
-void installSpanishTranslations() {
-    if(qApp->findChild<QTranslator*>("gpdfSpanishTranslator")) return;
-    auto translator=new QTranslator(qApp); translator->setObjectName("gpdfSpanishTranslator");
-    if(translator->load(":/translations/qtbase_es.qm")) qApp->installTranslator(translator);
-    auto fallback=new SpanishUiFallback(qApp); qApp->installTranslator(fallback);
+QString savedUiLanguage() {
+    QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+    return settings.value("ui/language").toString()=="en" ? "en" : "es";
+}
+QString currentUiLanguage() { return activeLanguage; }
+bool initializeUiLanguage(const QString& language) {
+    QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+    if(settings.contains("ui/language")) return true;
+    return saveUiLanguage(language);
+}
+bool saveUiLanguage(const QString& language) {
+    if(language!="es" && language!="en") return false;
+    QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+    settings.setValue("ui/language",language); settings.sync();
+    return settings.status()==QSettings::NoError;
+}
+void installUiTranslations() {
+    if(!activeLanguage.isEmpty()) return;
+    activeLanguage=savedUiLanguage();
+    auto translator=new QTranslator(qApp); translator->setObjectName("gpdfUiTranslator");
+    const auto catalog=activeLanguage=="en" ? ":/translations/gpdf_en.qm" : ":/translations/qtbase_es.qm";
+    if(translator->load(catalog)) qApp->installTranslator(translator);
+    if(activeLanguage=="es") {
+        auto fallback=new SpanishUiFallback(qApp); qApp->installTranslator(fallback);
+    }
 }

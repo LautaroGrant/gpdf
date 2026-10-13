@@ -11,7 +11,7 @@
 - `UiSupport.h`: controles auxiliares, delegado de búsqueda, iconos y soporte nativo de Windows.
 - `SessionStore`: lectura, guardado atómico del manifiesto y limpieza posterior de respaldos.
 - `AnnotationExport`: formato y escritura de resúmenes, separado de la validación de destinos de la ventana.
-- `Translations.cpp`: instalación de traducciones, compilada en gpdf_ui.
+- `Translations.h` / `Translations.cpp`: traducción de textos de interfaz, preferencia de idioma e instalación del catálogo al iniciar; compilada en gpdf_ui. Español es el idioma fuente y el inglés está en `resources/translations/gpdf_en.ts` / `.qm`. El motor PDF conserva sus algoritmos y cachés independientemente del idioma.
 - `PdfDocument`: acceso a PDFium, persistencia, historial y cachés de texto/anotaciones. Highlight y Underline nuevos no guardan cuerpos de comentario; sus fragmentos se extraen del texto para el panel/exportación. Underline utiliza una apariencia explícita para mantener color y grosor en otros lectores.
 - `SingleInstance`: elección de instancia y transmisión de rutas por IPC local.
 
@@ -29,4 +29,4 @@ Estas medidas reducen contención con tareas de fondo. No convierten las operaci
 
 ## Verificación
 
-CTest ejecuta pdf_roundtrip, annotation_ui y pdf_corpus. La herramienta corpus_smoke recorre tamaños y texto de todas las páginas, renderiza primera/intermedia/última y edita sólo copias. Sus hashes se calculan por streaming. Documentos del usuario no se incorporan como fixtures ni se versionan.
+CTest ejecuta pdf_roundtrip, annotation_ui, pdf_corpus, language_spanish y language_english. La herramienta corpus_smoke recorre tamaños y texto de todas las páginas, renderiza primera/intermedia/última y edita sólo copias. Las pruebas de idioma verifican traducciones, exportaciones, catálogo, atajos personalizados y preferencias al reiniciar. Sus hashes se calculan por streaming. Documentos del usuario no se incorporan como fixtures ni se versionan.

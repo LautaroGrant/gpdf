@@ -25,7 +25,7 @@ if ($Package) {
     Copy-Item "$build/GPDF.exe","$build/pdfium.dll" $dist
     & "$qt/bin/windeployqt.exe" --release --no-translations --no-opengl-sw "$dist/GPDF.exe"
     if ($LASTEXITCODE) { throw 'Falló el empaquetado.' }
-    Copy-Item "$root/README.md","$root/CHANGELOG.md","$root/VERSION" $dist
+    Copy-Item "$root/README.md","$root/README.es.md","$root/CHANGELOG.md","$root/VERSION" $dist
     $revision=& git -C $root rev-parse HEAD 2>$null
     $dirty=if($LASTEXITCODE -eq 0) { [bool](& git -C $root status --porcelain) } else { $null }
     [ordered]@{

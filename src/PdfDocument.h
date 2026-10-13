@@ -1,4 +1,5 @@
 #pragma once
+#include "Translations.h"
 #include <QImage>
 #include <QColor>
 #include <QHash>
@@ -23,6 +24,8 @@ public:
     QString pageText(int page) const;
     QVector<QPair<QString,QString>> properties() const;
     int characterCount() const;
+    QPair<int,int> wordRange(int index) const;
+    QPair<int,int> lineRange(int index) const;
     bool moveTextAnnotation(int index,QPointF topLeft);
     int moveCommentAnnotation(int sourcePage,int index,int destinationPage,QPointF topLeft);
     bool canUndo() const { return historyPosition_>0; }
@@ -136,7 +139,7 @@ private:
     mutable FPDF_PAGE hoverPage_ = nullptr;
     mutable FPDF_TEXTPAGE hoverText_ = nullptr;
     mutable int hoverIndex_ = -1;
-    mutable QHash<int,QVector<QRectF>> hoverRegions_;
+    mutable std::unique_ptr<QCache<int,QVector<QRectF>>> hoverRegions_=std::make_unique<QCache<int,QVector<QRectF>>>(2*1024*1024);
     QByteArray bytes_;
     QByteArray password_;
     int index_ = 0;

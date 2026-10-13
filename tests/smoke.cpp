@@ -39,6 +39,12 @@ int main(int argc, char** argv) {
         require(searchMatches.size()==1 && searchMatches.first().first==0 && searchMatches.first().count==5 && !searchMatches.first().rectangles.isEmpty(),"case-insensitive search with geometry");
         require(pdf.searchPage(0,"missing phrase").isEmpty() && pdf.searchPage(0,"").isEmpty(),"no matches and empty query");
         require(pdf.pageIndex()==0 && !pdf.dirty(),"search preserves page and document state");
+        {
+            PdfDocument words; require(words.createSample(1,"Cortázar's examen, 2026."),"Unicode word selection fixture");
+            auto word=words.wordRange(3); require(words.selectionText(word.first,word.second)=="Cortázar's","word selection preserves accents and internal apostrophe");
+            auto punctuation=words.wordRange(17); require(words.selectionText(punctuation.first,punctuation.second)==",","punctuation is separate from the word");
+            require(words.wordRange(-1)==QPair<int,int>(-1,-1) && words.lineRange(words.characterCount())==QPair<int,int>(-1,-1),"out of range selection is empty");
+        }
         auto textBounds=pdf.selectionRects(0,43).first();
         auto beforeSpace=pdf.selectionRects(4,4).first();
         auto afterSpace=pdf.selectionRects(6,6).first();
@@ -301,6 +307,10 @@ int main(int argc, char** argv) {
             require(markup.underline(0,8,QColor("#2855b4"),0.5),"create standard underline");
             require(markup.annotationType(0)==FPDF_ANNOT_UNDERLINE && markup.annotationContents(0).isEmpty(),"underline is text markup without a comment body");
             auto thin=markup.render(2); require(bluePixels(thin)>0,"underline has a visible appearance");
+            auto textBottom=markup.copyAnnotation(0).quads[0].y3;
+            double highestBlue=-1;
+            for(int y=0;y<thin.height();++y) for(int x=0;x<thin.width();++x) { auto c=thin.pixelColor(x,y); if(c.blue()>c.red()+60 && c.blue()>c.green()+40) highestBlue=std::max(highestBlue,markup.pageSize().height()-y/2.0); }
+            require(highestBlue<textBottom-0.25,"underline leaves a visible gap below text without shifting text quads");
             require(markup.formatDrawing(0,QColor("#2855b4"),6),"change underline thickness"); auto thick=markup.render(2);
             require(bluePixels(thick)>bluePixels(thin)*3,"selected thickness changes actual rendered line");
             auto copy=markup.copyAnnotation(0); require(std::abs(copy.strokeWidth-6)<0.01 && !copy.quads.isEmpty(),"underline stores width and selected text geometry");

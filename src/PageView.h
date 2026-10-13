@@ -1,6 +1,7 @@
 #pragma once
 #include "UiSupport.h"
 #include "CommentPopup.h"
+#include <QElapsedTimer>
 
 class PageView : public QWidget {
 public:
@@ -88,14 +89,14 @@ public:
         auto layout=new QVBoxLayout(textEditor); layout->setContentsMargins(4,4,4,4); layout->setSpacing(3); layout->setSizeConstraint(QLayout::SetNoConstraint);
         textInput=new QTextEdit; textInput->setObjectName("inlineTextInput"); textInput->setAcceptRichText(false);
         textInput->setAutoFillBackground(false); textInput->viewport()->setAutoFillBackground(false);
-        textInput->setPlaceholderText("Escribir aquí…"); layout->addWidget(textInput);
+        textInput->setPlaceholderText(gpdfTr("Escribir aquí…")); layout->addWidget(textInput);
         auto controls=new QWidget; auto row=new QHBoxLayout(controls); row->setContentsMargins(0,0,0,0); row->setSpacing(3);
         auto formatScroll=new QScrollArea; formatScroll->setWidget(controls); formatScroll->setWidgetResizable(true);
         formatScroll->setFrameShape(QFrame::NoFrame); formatScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         formatScroll->setFixedHeight(44); layout->addWidget(formatScroll);
-        auto colorButton=new QToolButton; colorButton->setText("A ▾"); colorButton->setToolTip("Color del texto");
+        auto colorButton=new QToolButton; colorButton->setText("A ▾"); colorButton->setToolTip(gpdfTr("Color del texto"));
         colorButton->setPopupMode(QToolButton::InstantPopup); auto colors=new QMenu(colorButton);
-        const QList<QPair<QString,QColor>> palette={{"Negro",Qt::black},{"Azul",QColor("#0078d4")},{"Verde",QColor("#128012")},{"Rojo",QColor("#cc0000")},{"Blanco",Qt::white}};
+        const QList<QPair<QString,QColor>> palette={{gpdfTr("Negro"),Qt::black},{gpdfTr("Azul"),QColor("#0078d4")},{gpdfTr("Verde"),QColor("#128012")},{gpdfTr("Rojo"),QColor("#cc0000")},{gpdfTr("Blanco"),Qt::white}};
         for(const auto& entry:palette) {
             QPixmap swatch(16,16); swatch.fill(entry.second);
             auto action=colors->addAction(QIcon(swatch),entry.first);
@@ -108,14 +109,14 @@ public:
         auto size=new QSpinBox; size->setObjectName("inlineTextSize"); size->setRange(6,96); size->setValue(textStyle.size); size->setSuffix(" pt");
         row->addWidget(size);
         connect(size,&QSpinBox::valueChanged,textEditor,[this](int value){ textStyle.size=value; previewText(); });
-        auto apply=new QToolButton; apply->setText("✓"); apply->setToolTip("Aplicar texto"); row->addWidget(apply);
+        auto apply=new QToolButton; apply->setText("✓"); apply->setToolTip(gpdfTr("Aplicar texto")); row->addWidget(apply);
         connect(apply,&QToolButton::clicked,textEditor,[this]{ finishText(); });
-        auto discard=new QToolButton; discard->setText("×"); discard->setToolTip("Descartar texto (Esc)"); row->addWidget(discard);
+        auto discard=new QToolButton; discard->setText("×"); discard->setToolTip(gpdfTr("Descartar texto (Esc)")); row->addWidget(discard);
         connect(discard,&QToolButton::clicked,textEditor,[this]{ cancelText(); });
         row->addWidget(new TextResizeGrip(textEditor));
         auto anchor=devicePoint(point); auto page=activeRect();
         int availableWidth=int(page.right()-anchor.x()),availableHeight=int(page.bottom()-anchor.y());
-        if(availableWidth<120 || availableHeight<100) { cancelText(); if(report) report("Elegir un punto más alejado de los bordes derecho e inferior."); return; }
+        if(availableWidth<120 || availableHeight<100) { cancelText(); if(report) report(gpdfTr("Elegir un punto más alejado de los bordes derecho e inferior.")); return; }
         textEditor->setMinimumSize(std::min(180,availableWidth),100); textEditor->setMaximumSize(availableWidth,availableHeight);
         textEditor->setGeometry(int(anchor.x()),int(anchor.y()),std::min(availableWidth,std::max(330,int(textStyle.width*effectiveScale))),std::min(availableHeight,std::max(140,int(textStyle.height*effectiveScale)+44)));
         textInput->setPlainText(contents);
@@ -147,6 +148,12 @@ public:
         hideComment();
         invalidateCache(pdf.pageIndex(),true);
         rebuild(); update();
+    }
+    void refreshNavigation() {
+        const double previousScale=effectiveScale;
+        rebuild();
+        if(!qFuzzyCompare(previousScale,effectiveScale)) invalidateCache(-1,true);
+        update();
     }
     void setDarkMode(bool value) { darkMode=value; invalidateCache(); previewText(); update(); }
     void setMode(Mode value) { mode=value; resetSelection(); invalidateCache(); rebuild(); update(); }
@@ -233,7 +240,7 @@ public:
     void activate(int index) {
         if(index<0 || index==pdf.pageIndex()) return;
         if(!finishText()) return;
-        if(pdf.setPage(index)) { resetSelection(true); if(fit!=Manual) { invalidateCache(-1,true); rebuild(); } if(activated) activated(index); update(); }
+        if(pdf.setPage(index)) { resetSelection(true); refreshNavigation(); if(activated) activated(index); }
     }
 protected:
     bool eventFilter(QObject* target,QEvent* event) override {
@@ -257,7 +264,7 @@ protected:
     void paintEvent(QPaintEvent* event) override {
         QPainter painter(this); painter.setRenderHint(QPainter::SmoothPixmapTransform);
         painter.fillRect(event->rect(),darkMode ? QColor("#20252d") : QColor("#e9edf2"));
-        if(!pdf.loaded()) { painter.setPen(QColor("#6b7280")); painter.drawText(rect(),Qt::AlignCenter,"Hacer clic aquí para abrir un PDF"); return; }
+        if(!pdf.loaded()) { painter.setPen(QColor("#6b7280")); painter.drawText(rect(),Qt::AlignCenter,gpdfTr("Hacer clic aquí para abrir un PDF")); return; }
         // Painting never waits for a background PDFium operation. Keep cached pages visible.
         std::unique_lock apiLock(PdfDocument::apiMutex(),std::try_to_lock);
         if(!apiLock.owns_lock() && !renderRetryScheduled) {
@@ -325,6 +332,14 @@ protected:
         int index=pageAt(event->position()); if(index<0) return;
         activate(index);
         const auto p=pdfPoint(event->position());
+        if(tool==Select && wordClickTimer.isValid() && wordClickTimer.elapsed()<=QApplication::doubleClickInterval() && wordClickRevision==pdf.revision() && wordClickPage==pdf.pageIndex() && (event->position()-wordClickPosition).manhattanLength()<=QApplication::startDragDistance()) {
+            wordClickTimer.invalidate();
+            auto range=pdf.lineRange(pdf.characterAt(p));
+            resetSelection(); allTextSelected=false; first=range.first; last=range.second; searchPage=-1; searchRects.clear();
+            if(annotationSelected) annotationSelected(-1);
+            update(); event->accept(); return;
+        }
+        wordClickTimer.invalidate();
         allTextSelected=false;
         int hit=(tool==Select || tool==Note) ? annotationAt(p) : textAnnotationAt(p);
         if(tool==Note && hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_TEXT) {
@@ -338,7 +353,7 @@ protected:
             beginText(p,hit);
         } else {
             bool accepted;
-            const QString value=studyMultilineText(this,tool==Note ? "Comentario" : "Escribir en la página",{},&accepted);
+            const QString value=studyMultilineText(this,tool==Note ? gpdfTr("Comentario") : gpdfTr("Escribir en la página"),{},&accepted);
             if(accepted && !value.trimmed().isEmpty()) {
                 if(!(tool==Note ? pdf.note(p,value) : pdf.freeText(p,value))) report(pdf.error());
                 else { changed(); if(tool==Note) showComment(pdf.annotationCount()-1); }
@@ -402,11 +417,22 @@ protected:
         auto p=pdfPoint(event->position()); int hit=annotationAt(p);
         if(hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_TEXT) showComment(hit);
         else if(hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_FREETEXT) beginText(p,hit);
+        else {
+            auto range=pdf.wordRange(pdf.characterAt(p));
+            resetSelection(); allTextSelected=false; first=range.first; last=range.second; searchPage=-1; searchRects.clear();
+            if(annotationSelected) annotationSelected(-1);
+            if(first>=0) { wordClickTimer.start(); wordClickPosition=event->position(); wordClickPage=pdf.pageIndex(); wordClickRevision=pdf.revision(); }
+            setFocus(); update(); event->accept();
+        }
     }
     void keyPressEvent(QKeyEvent* event) override {
         QWidget::keyPressEvent(event);
     }
 private:
+    QElapsedTimer wordClickTimer;
+    QPointF wordClickPosition;
+    int wordClickPage=-1;
+    quint64 wordClickRevision=0;
     CommentPopup* commentPopup=nullptr;
     bool draggingText=false,dragCandidate=false;
     bool dragIsComment=false;

@@ -1,4 +1,5 @@
 #pragma once
+#include "Translations.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QSettings>
@@ -20,7 +21,7 @@ inline void registerPdfApplication() {
     auto set=[&](const QString& key,const QString& value) {
         if(!registry.contains(key) || registry.value(key).toString()!=value) { registry.setValue(key,value); changed=true; }
     };
-    set("Classes/GPDF.PDF/.","Documento PDF de GPDF");
+    set("Classes/GPDF.PDF/.",gpdfTr("Documento PDF de GPDF"));
     set("Classes/GPDF.PDF/DefaultIcon/.",pdfIcon);
     set("Classes/GPDF.PDF/shell/open/command/.",command);
     set("Classes/.pdf/OpenWithProgids/GPDF.PDF","");
@@ -29,7 +30,7 @@ inline void registerPdfApplication() {
     set("Classes/Applications/GPDF.exe/shell/open/command/.",command);
     set("Classes/Applications/GPDF.exe/SupportedTypes/.pdf","");
     set("GPDF/Capabilities/ApplicationName","GPDF");
-    set("GPDF/Capabilities/ApplicationDescription","Lector y editor de anotaciones PDF");
+    set("GPDF/Capabilities/ApplicationDescription",gpdfTr("Lector y editor de anotaciones PDF"));
     set("GPDF/Capabilities/ApplicationIcon",appIcon);
     set("GPDF/Capabilities/FileAssociations/.pdf","GPDF.PDF");
     set("RegisteredApplications/GPDF","Software\\GPDF\\Capabilities");

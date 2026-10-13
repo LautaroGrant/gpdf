@@ -143,7 +143,7 @@ int main(int argc,char** argv) {
         }
         {
             // Synthetic cropped pages, including an intrinsic PDF rotation.
-            QByteArray content="BT /F1 20 Tf 200 600 Td (Cropped selection alignment) Tj ET\n";
+            QByteArray content="BT /F1 20 Tf 200 600 Td (Cropped selection alignment) Tj 0 -40 Td (Second line stays separate) Tj ET\n";
             QList<QByteArray> objects={"<< /Type /Catalog /Pages 2 0 R >>","<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [100 200 500 750] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [100 200 500 750] /Rotate 90 /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
@@ -165,6 +165,14 @@ int main(int argc,char** argv) {
                     canvas.setRotation(turn);
                     auto device=canvas.devicePoint(pdfCenter); auto back=canvas.pdfPoint(device);
                     require(QLineF(pdfCenter,back).length()<0.003 && cropped.characterAt(back)>=match.first().first,"cropped selection point follows rendering and both rotations");
+                    QMouseEvent doubleClick(QEvent::MouseButtonDblClick,device,canvas.mapToGlobal(device.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+                    QApplication::sendEvent(&canvas,&doubleClick);
+                    require(cropped.selectionText(canvas.first,canvas.last)=="Cropped","double click selects whole word with crop and rotation");
+                    QMouseEvent releaseClick(QEvent::MouseButtonRelease,device,canvas.mapToGlobal(device.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+                    QApplication::sendEvent(&canvas,&releaseClick);
+                    QMouseEvent thirdClick(QEvent::MouseButtonPress,device,canvas.mapToGlobal(device.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+                    QApplication::sendEvent(&canvas,&thirdClick); QApplication::sendEvent(&canvas,&releaseClick);
+                    require(cropped.selectionText(canvas.first,canvas.last)=="Cropped selection alignment","triple click selects only the visual line with crop and rotation");
                 }
                 auto image=cropped.render(1); auto normalized=cropped.pageToNormalized(page,pdfCenter);
                 auto rect=match.first().rectangles.first(); auto a=cropped.pageToNormalized(page,rect.topLeft()),b=cropped.pageToNormalized(page,rect.bottomRight());
@@ -242,6 +250,12 @@ int main(int argc,char** argv) {
         require(view->pdf.pageIndex()==2 && !view->pageRects[2].isEmpty() && view->searchPage==2,"result navigation in single mode");
         mode->setCurrentIndex(2); results->setCurrentRow(1);
         require(view->pdf.pageIndex()==1 && !view->pageRects[0].isEmpty() && !view->pageRects[1].isEmpty(),"result navigation in double mode");
+        window.activateWindow(); app.processEvents(); results->setFocus(); app.processEvents();
+        require(results->hasFocus(),"search result keyboard fixture has focus");
+        QKeyEvent nextResult(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier); QApplication::sendEvent(results,&nextResult);
+        require(results->currentRow()==2 && view->pdf.pageIndex()==2,"Enter on a search result advances to the next match");
+        results->setCurrentRow(4); QApplication::sendEvent(results,&nextResult);
+        require(results->currentRow()==0 && view->pdf.pageIndex()==0,"Enter on final search result wraps to the first match");
         snapshot("search-results");
         searchToggle->setChecked(false);
         mode->setCurrentIndex(0);
@@ -435,7 +449,7 @@ int main(int argc,char** argv) {
         require(!window.findChild<QAction*>("menuFindAction"),"Edit menu no longer has Search");
         auto menuView=window.findChild<QMenu*>("viewMenu");
         auto menuItems=menuView->actions(); int toolbarIndex=menuItems.indexOf(window.findChild<QAction*>("toggleToolbarAction"));
-        const QStringList panelNames={"Búsqueda","Anotaciones","Miniaturas","Marcadores del PDF","Marcadores Personales"};
+        const QStringList panelNames={"Búsqueda","Anotaciones","Miniaturas","Marcadores del PDF","Marcadores personales"};
         require(menuItems[toolbarIndex+1]->isSeparator(),"View panel section follows toolbar section");
         for(int i=0;i<panelNames.size();++i) require(menuItems[toolbarIndex+2+i]->text()==panelNames[i],"View panels are in requested order");
         require(menuItems[toolbarIndex+7]->isSeparator() && menuItems[toolbarIndex+8]->text()=="Modo oscuro" && menuItems[toolbarIndex+9]->text()=="Pantalla completa" && menuItems.size()==toolbarIndex+10,"View ends with separate dark and fullscreen section");
@@ -521,6 +535,11 @@ int main(int argc,char** argv) {
         require(view->pdf.note({100,650},"Cambio sin guardar"),"first document pending change");
         window.openDocument(second); app.processEvents();
         require(tabs->count()==2 && !tabsToolbar->isHidden() && view->pdf.pageCount()==2,"two documents show tabs");
+        auto originalTabText=tabs->tabText(1);
+        tabs->setTabText(1,QString(180,'W')+".pdf"); app.processEvents();
+        require(tabs->tabRect(1).width()<=240 && tabs->elideMode()==Qt::ElideRight,"long document tabs have bounded width and ellipsis");
+        require(tabs->tabToolTip(1)==second,"full document path remains in tooltip");
+        tabs->setTabText(1,originalTabText);
         require(tabsToolbar->geometry().bottom()<=toolbar->geometry().top(),"tabs appear above tools");
         snapshot("document-tabs");
         window.findChild<QAction*>("toggleAnnotations")->setChecked(true); app.processEvents();
@@ -622,8 +641,8 @@ int main(int argc,char** argv) {
         auto commentValue=studyMultilineText(&window,"Comentario de prueba",{},&commentAccepted);
         require(commentAccepted && commentValue=="Comentario\nSegunda","comments use Enter to accept and Shift Enter for newline");
         require(window.findChild<QAction*>("selectAllAction")->shortcut()==QKeySequence("Ctrl+Shift+A"),"select all shortcut changed");
-        QKeyEvent annotationsKey(QEvent::KeyPress,Qt::Key_A,Qt::ControlModifier); bool visible=window.findChild<QAction*>("toggleAnnotations")->isChecked(); QApplication::sendEvent(view,&annotationsKey);
-        require(window.findChild<QAction*>("toggleAnnotations")->isChecked()!=visible,"Ctrl A toggles annotations");
+        QKeyEvent annotationsKey(QEvent::KeyPress,Qt::Key_N,Qt::ControlModifier); bool visible=window.findChild<QAction*>("toggleAnnotations")->isChecked(); QApplication::sendEvent(view,&annotationsKey);
+        require(window.findChild<QAction*>("toggleAnnotations")->isChecked()!=visible,"Ctrl N toggles annotations");
         window.findChild<QAction*>("goFirst")->trigger();
         window.findChild<QAction*>("goLast")->trigger(); require(view->pdf.pageIndex()==1,"go to document end");
         window.findChild<QAction*>("goBack")->trigger(); require(view->pdf.pageIndex()==0,"navigation back");
@@ -698,6 +717,21 @@ int main(int argc,char** argv) {
         auto thumbs=window.findChild<QListWidget*>("thumbnails"); QElapsedTimer thumbsWait; thumbsWait.start(); while(thumbs->item(0)->icon().isNull() && thumbsWait.elapsed()<3000) app.processEvents();
         require(thumbs->count()==2 && !thumbs->item(0)->icon().isNull(),"thumbnails render asynchronously");
         thumbs->itemClicked(thumbs->item(0)); require(view->pdf.pageIndex()==0,"thumbnail navigates to page"); snapshot("study-navigation");
+        thumbs->setFocus(); QKeyEvent nextThumbnail(QEvent::KeyPress,Qt::Key_Down,Qt::NoModifier); QApplication::sendEvent(thumbs,&nextThumbnail);
+        require(view->pdf.pageIndex()==1 && thumbs->currentRow()==1,"thumbnail down arrow selects and navigates");
+        auto thumbnailPoint=thumbs->visualItemRect(thumbs->item(0)).center();
+        QMouseEvent thumbnailPress(QEvent::MouseButtonPress,thumbnailPoint,thumbs->viewport()->mapToGlobal(thumbnailPoint),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        QMouseEvent thumbnailRelease(QEvent::MouseButtonRelease,thumbnailPoint,thumbs->viewport()->mapToGlobal(thumbnailPoint),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        QApplication::sendEvent(thumbs->viewport(),&thumbnailPress); QApplication::sendEvent(thumbs->viewport(),&thumbnailRelease);
+        require(view->pdf.pageIndex()==0 && thumbs->currentRow()==0,"real thumbnail mouse click navigates and keeps selection");
+        const auto thumbnailSize=thumbs->item(0)->icon().availableSizes().value(0);
+        require(!thumbnailSize.isEmpty() && thumbnailSize.width()<=140 && thumbnailSize.height()<=190,"thumbnail bitmap is bounded in both dimensions");
+        int thumbnailResets=0;
+        auto thumbnailResetConnection=QObject::connect(thumbs->model(),&QAbstractItemModel::modelReset,[&]{ ++thumbnailResets; });
+        QElapsedTimer navigationTimer; navigationTimer.start();
+        for(int step=0;step<100;++step) window.findChild<QAction*>(step%2 ? "goFirst" : "goLast")->trigger();
+        const double navigationMs=navigationTimer.nsecsElapsed()/1000000.0;
+        require(view->pdf.pageIndex()==0 && thumbnailResets==0,"repeated navigation retains the thumbnail model");
         auto primaryHighlight=window.findChild<QAction*>("highlightAction"); auto secondaryHighlight=window.findChild<QAction*>("secondaryHighlightAction");
         require(primaryHighlight->shortcut()==QKeySequence("Ctrl+S") && secondaryHighlight->shortcut()==QKeySequence("Ctrl+Shift+S"),"two highlight shortcuts");
         require(view->highlightColor.alpha()==153 && view->secondaryHighlightColor.alpha()==153,"sixty percent highlight opacity");
@@ -705,6 +739,9 @@ int main(int argc,char** argv) {
         view->first=0; view->last=5; int beforePrimary=view->pdf.annotationCount(); view->setFocus();
         QKeyEvent primaryKey(QEvent::KeyPress,Qt::Key_S,Qt::ControlModifier); QApplication::sendEvent(view,&primaryKey);
         require(view->pdf.annotationCount()==beforePrimary+1,"Ctrl S keyboard event highlights selection after migration");
+        require(thumbnailResets==0,"editing annotation retains thumbnail items and PDF outline");
+        QObject::disconnect(thumbnailResetConnection);
+        std::cout<<"NAVIGATION_AUDIT steps=100 ms="<<navigationMs<<" thumbnail_model_resets="<<thumbnailResets<<'\n';
         window.findChild<QAction*>("undoAction")->trigger(); snapshot("before-wheel-zoom");
         view->first=0; view->last=5; int beforeHighlights=view->pdf.annotationCount(); QKeyEvent secondaryKey(QEvent::KeyPress,Qt::Key_S,Qt::ControlModifier|Qt::ShiftModifier); QApplication::sendEvent(view,&secondaryKey);
         require(view->pdf.annotationCount()==beforeHighlights+1,"secondary shortcut creates highlight");
@@ -886,6 +923,15 @@ int main(int argc,char** argv) {
             require(canvas->pdf.pageIndex()==2 && canvas->mode==PageView::Single && qFuzzyCompare(canvas->scale,1.75),"reopen closed tab restores per-file page view and zoom");
             require(marks->count()==1 && marks->item(0)->text().contains("Tema del examen"),"personal bookmarks persist after closing tab");
             reader.findChild<QAction*>("goFirst")->trigger(); marks->itemClicked(marks->item(0)); require(canvas->pdf.pageIndex()==2,"personal bookmark navigates");
+            require(marks->currentItem() && marks->currentItem()->data(Qt::UserRole+1).toString()==marker,"navigated personal bookmark remains selected");
+            require(reader.findChild<QPushButton*>("addPersonalBookmarkButton")->text()=="Añadir","personal bookmark add button has a descriptive label");
+            QTimer::singleShot(0,[&]{ if(auto dialog=qobject_cast<QInputDialog*>(app.activeModalWidget())) { dialog->setTextValue("Tema renombrado"); dialog->accept(); } });
+            reader.findChild<QPushButton*>("renamePersonalBookmarkButton")->click();
+            require(marks->currentItem() && marks->currentItem()->data(Qt::UserRole+2).toString()=="Tema renombrado","selected bookmark can be renamed after navigation");
+            auto removable=reader.addPersonalBookmark("Borrar tras navegar",0);
+            marks->setCurrentRow(1); marks->itemClicked(marks->currentItem()); reader.findChild<QPushButton*>("deletePersonalBookmarkButton")->click();
+            require(marks->count()==1 && marks->item(0)->data(Qt::UserRole+1).toString()==marker,"selected bookmark can be deleted after navigation");
+            reader.renamePersonalBookmark(marker,"Tema del examen"); reader.findChild<QAction*>("goLast")->trigger();
             reader.findChild<QAction*>("toggleAnnotations")->setChecked(true);
             if(!output.isEmpty()) { for(int pass=0;pass<4;++pass) { app.processEvents(); canvas->workers.waitForDone(); } reader.grab().save(output+"/study-tools.png"); }
             require(reader.saveSession(),"persist reading checkpoint");
@@ -1122,7 +1168,9 @@ int main(int argc,char** argv) {
             for(auto button:reader.findChildren<QPushButton*>()) if(button->text()=="Editar") { button->click(); break; } formatDialog.stop();
             require(formatted && canvas->pdf.copyAnnotation(0).strokeWidth==5 && canvas->pdf.annotationContents(0).isEmpty(),"Edit modifies underline format without creating a comment body");
             if(!output.isEmpty()) { canvas->workers.waitForDone(); app.processEvents(); reader.grab().save(output+"/underline-and-annotations.png"); }
-            Window next; PageView* nextCanvas=nullptr; for(auto widget:next.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) nextCanvas=page;
+            reader.findChild<QAction*>("saveFileAction")->trigger(); require(reader.saveSession(true),"save underline reading session");
+            Window next; next.restoreSession(); PageView* nextCanvas=nullptr; for(auto widget:next.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) nextCanvas=page;
+            require(next.findChild<QComboBox*>("annotationTypeFilter")->currentIndex()==6,"underline filter restored across sessions");
             require(nextCanvas->underlineWidth==4 && nextCanvas->underlineColor.rgb()==QColor("#cc2244").rgb(),"underline settings persist across windows");
         }
         {

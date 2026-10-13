@@ -1,5 +1,6 @@
 <RCC>
  <qresource prefix="/translations">
   <file alias="qtbase_es.qm">translations/qtbase_es.qm</file>
+  <file alias="gpdf_en.qm">translations/gpdf_en.qm</file>
  </qresource>
 </RCC>
