@@ -67,6 +67,8 @@ public:
     bool createSample(int pages=1,const QString& sampleText={});
     bool setPage(int index);
     bool saveCopy(const QString& path);
+    bool diskChanged(const QString& path) const;
+    bool reload(const QString& path) { const auto password=password_; return open(path,password); }
     QImage render(double scale) const;
     QImage renderPage(int index, double scale) const;
     QSizeF pageSize(int index) const;
@@ -141,6 +143,7 @@ private:
     mutable int hoverIndex_ = -1;
     mutable std::unique_ptr<QCache<int,QVector<QRectF>>> hoverRegions_=std::make_unique<QCache<int,QVector<QRectF>>>(2*1024*1024);
     QByteArray bytes_;
+    QByteArray diskDigest_;
     QByteArray password_;
     int index_ = 0;
     bool dirty_ = false;

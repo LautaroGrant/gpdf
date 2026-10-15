@@ -129,6 +129,14 @@ public:
         connect(zoomPercent,&QSpinBox::valueChanged,[this](int value){ setZoom(value/100.0); });
         action("+",[this]{ zoom(0.10); });
         bar->addSeparator();
+        auto rotate=action(gpdfTr("Girar 90° a la derecha"),[this]{ rotateView((view->rotation+1)%4); });
+        rotate->setObjectName("rotateClockwiseAction");
+        rotate->setIcon(QIcon(new GpdfToolIcon(6)));
+        rotate->setShortcut(QKeySequence("Ctrl+R")); addAction(rotate);
+        auto rotateButton=qobject_cast<QToolButton*>(bar->widgetForAction(rotate));
+        rotateButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        rotateButton->setAccessibleName(rotate->text());
+        bar->addSeparator();
         searchAction=new QAction(gpdfTr("Búsqueda"),this); addAction(searchAction);
         searchAction->setObjectName("searchAction"); searchAction->setCheckable(true);
         auto searchToggle=new QToolButton; searchToggle->setDefaultAction(searchAction);
@@ -200,11 +208,15 @@ public:
             double beyond=std::max(0,std::abs(distance)-12);
             int speed=int(std::min(1200.0,beyond*beyond/600.0))*(distance<0 ? -1 : 1);
             auto bar=scroll->verticalScrollBar(); bar->setValue(bar->value()+speed);
+            int horizontal=QCursor::pos().x()-autoScrollOrigin.x();
+            double sideways=std::max(0,std::abs(horizontal)-12);
+            int horizontalSpeed=int(std::min(1200.0,sideways*sideways/600.0))*(horizontal<0 ? -1 : 1);
+            auto horizontalBar=scroll->horizontalScrollBar(); horizontalBar->setValue(horizontalBar->value()+horizontalSpeed);
         });
         qApp->installEventFilter(this);
         checkpointTimer=new QTimer(this); checkpointTimer->setObjectName("checkpointTimer"); checkpointTimer->setSingleShot(true); checkpointTimer->setInterval(1500); connect(checkpointTimer,&QTimer::timeout,this,[this]{ saveSession(); });
         auto periodic=new QTimer(this); periodic->setInterval(15000); connect(periodic,&QTimer::timeout,this,[this]{ if(!documents.empty()) saveSession(); }); periodic->start();
-        statusBar()->showMessage(gpdfTr("Abrir un documento desde Archivo.")); view->refresh();
+        statusBar()->hide(); view->refresh();
     }
     ~Window() override {
         stopAutoScroll();
@@ -280,11 +292,11 @@ public:
     }
 
     bool saveSession(bool clean=false) {
-        if(restoringSession) return true;
+        if(restoringSession || sessionClosed) return true;
         if(activeDocument>=0) captureDocument();
         QDir root(sessionDirectory()); if(!root.exists() && !QDir().mkpath(root.absolutePath())) return false;
         QJsonArray list;
-        for(int i=0;i<int(documents.size());++i) {
+        for(int i=0;!clean && i<int(documents.size());++i) {
             auto& doc=*documents[i]; auto& engine=i==activeDocument ? pdf : doc.stored;
             QString backup=doc.id+".pdf"; bool dirty=engine.dirty() && !doc.discardOnExit;
             if(dirty && (doc.backupRevision!=engine.revision() || !root.exists(backup))) {
@@ -296,8 +308,8 @@ public:
             list.append(item);
         }
         for(const auto& pending:pendingRecoveryItems) list.append(pending);
-        QString activeId=activeDocument>=0 ? documents[activeDocument]->id : QString();
-        return SessionStore::write(root,QJsonObject{{"version",1},{"clean",clean},{"active",activeDocument},{"activeId",activeId},{"documents",list}});
+        QString activeId=!clean && activeDocument>=0 ? documents[activeDocument]->id : QString();
+        return SessionStore::write(root,QJsonObject{{"version",1},{"clean",clean},{"active",clean ? -1 : activeDocument},{"activeId",activeId},{"documents",list}});
     }
 
     void restoreWindow() {
@@ -312,6 +324,14 @@ public:
     void restoreSession() {
         QDir root(sessionDirectory()); auto manifest=SessionStore::read(root); if(manifest.isEmpty()) return;
         auto list=manifest["documents"].toArray(); if(list.isEmpty()) return;
+        if(manifest["clean"].toBool()) {
+            QJsonArray pending;
+            for(auto value:list) {
+                auto item=value.toObject();
+                if(!item["backup"].toString().isEmpty() || !item["draft"].toObject().isEmpty()) pending.append(item);
+            }
+            list=pending; if(list.isEmpty()) return;
+        }
         bool recovery=false; for(auto value:list) { auto item=value.toObject(); if(!item["backup"].toString().isEmpty() || !item["draft"].toObject().isEmpty()) recovery=true; }
         bool recover=!recovery || QMessageBox::question(this,gpdfTr("Recuperar cambios"),gpdfTr("Hay cambios de la sesión anterior que no se guardaron. ¿Desea recuperarlos?"),QMessageBox::Yes|QMessageBox::No,QMessageBox::Yes)==QMessageBox::Yes;
         restoringSession=true; pendingRecoveryItems=QJsonArray(); QVector<QJsonObject> restored;
@@ -459,12 +479,26 @@ protected:
                     if(event->type()==QEvent::ShortcutOverride) { key->accept(); return true; }
                     return false;
                 }
-                bool editing=false;
-                for(auto parent=widget;parent && parent!=this;parent=parent->parentWidget()) if(qobject_cast<QLineEdit*>(parent) || qobject_cast<QTextEdit*>(parent) || qobject_cast<QPlainTextEdit*>(parent) || qobject_cast<QComboBox*>(parent) || qobject_cast<QAbstractSpinBox*>(parent)) { editing=true; break; }
-                QKeySequence pressed=key->key()==Qt::Key_Backtab ? QKeySequence(Qt::CTRL|Qt::SHIFT|Qt::Key_Tab) : QKeySequence(key->keyCombination());
+                auto isTextControl=[this](QWidget* target) {
+                    for(auto parent=target;parent && parent!=this;parent=parent->parentWidget())
+                        if(qobject_cast<QLineEdit*>(parent) || qobject_cast<QTextEdit*>(parent) || qobject_cast<QPlainTextEdit*>(parent) || qobject_cast<QComboBox*>(parent) || qobject_cast<QAbstractSpinBox*>(parent)) return true;
+                    return false;
+                };
+                // Ignored keys can bubble from an editor to its parent widget.
                 auto focused=QApplication::focusWidget();
+                const bool editing=isTextControl(widget) || (focused && focused->window()==this && isTextControl(focused));
+                QKeySequence pressed=key->key()==Qt::Key_Backtab ? QKeySequence(Qt::CTRL|Qt::SHIFT|Qt::Key_Tab) : QKeySequence(key->keyCombination());
                 const bool searchFocused=focused==searchInput || focused==searchResults || (focused && searchResults->isAncestorOf(focused));
                 const bool inlineActive=view->findChild<QWidget*>("inlineTextEditor")!=nullptr;
+                // Reserve typing and editor navigation before Qt's QAction shortcut dispatch.
+                // Enter/Escape retain their contextual search and annotation behavior.
+                if(editing && !(key->modifiers() & (Qt::ControlModifier|Qt::AltModifier|Qt::MetaModifier))
+                   && key->key()!=Qt::Key_Return && key->key()!=Qt::Key_Enter && key->key()!=Qt::Key_Escape) {
+                    if(event->type()==QEvent::ShortcutOverride) { key->accept(); return true; }
+                    if(focused && focused->window()==this && isTextControl(focused)
+                       && widget!=focused && !focused->isAncestorOf(widget) && !key->text().isEmpty()) return true;
+                    return false;
+                }
                 for(auto action:shortcutActions) {
                     if(editing && (action->objectName()=="deleteSelectionAction" || ((action->objectName()=="goPrevious" || action->objectName()=="goNext") && key->modifiers()==Qt::NoModifier))) continue;
                     if(!action->isEnabled()) continue;
@@ -489,7 +523,7 @@ protected:
     void closeEvent(QCloseEvent* event) override {
         int original=activeDocument;
         for(int i=0;i<int(documents.size());++i) { if(!switchDocument(i) || !confirmDiscard()) { for(auto& doc:documents) doc->discardOnExit=false; switchDocument(original); event->ignore(); return; } }
-        switchDocument(original); saveSession(true);
+        switchDocument(original); saveSession(true); sessionClosed=true; checkpointTimer->stop();
         QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
         settings.setValue("window/geometry",isFullScreen() ? fullscreenRestoreSavedGeometry : saveGeometry());
         settings.setValue("window/size",isFullScreen() ? fullscreenRestoreGeometry.size() : (isMaximized() || isMinimized() ? normalGeometry().size() : size()));
@@ -497,6 +531,7 @@ protected:
         event->accept();
     }
 private:
+    bool sessionClosed=false;
     Qt::WindowStates lastVisibleState=Qt::WindowNoState;
     bool printDialogActive=false;
     int zoomWheelRemainder=0;
@@ -807,6 +842,8 @@ private:
         },QKeySequence::Paste); separator();
         action(gpdfTr("Seleccionar todo"),"selectAllAction",[this]{ selectAllText(true); },QKeySequence("Ctrl+Shift+A"));
         action(gpdfTr("Seleccionar todo el texto de la página actual"),"selectPageTextAction",[this]{ selectAllText(false); });
+        separator();
+        action(gpdfTr("Agregar marcador personal…"),"addPersonalBookmarkAction",[this]{ promptPersonalBookmark(); },QKeySequence("Ctrl+D"));
         updateEditActions();
         connect(QApplication::clipboard(),&QClipboard::dataChanged,this,[this]{ updateEditActions(); });
         connect(qApp,&QApplication::focusChanged,this,[this]{ updateEditActions(); });
@@ -1021,12 +1058,6 @@ private:
             auto item=findChild<QAction*>(name); item->setCheckable(true);
             connect(item,&QAction::triggered,this,[this]{ syncViewActions(); });
         }
-        auto addBookmark=action(viewMenu,viewActions,gpdfTr("Agregar marcador personal…"),"addPersonalBookmarkAction",[this]{ promptPersonalBookmark(); },"Ctrl+D");
-        // Keep bookmark creation in the earlier section; the panel section only toggles panels.
-        viewMenu->removeAction(addBookmark);
-        auto toolbarAction=findChild<QAction*>("toggleToolbarAction");
-        auto menuItems=viewMenu->actions();
-        viewMenu->insertAction(menuItems[menuItems.indexOf(toolbarAction)-1],addBookmark);
         viewMenu->addSeparator();
         auto dark=action(viewMenu,viewActions,gpdfTr("Modo oscuro"),"darkModeAction",[this](bool enabled){ applyDarkMode(enabled); }); dark->setCheckable(true);
         auto fullscreen=action(viewMenu,viewActions,gpdfTr("Pantalla completa"),"fullscreenAction",[this](bool enabled){ setFullscreen(enabled); },"F11"); fullscreen->setCheckable(true);
@@ -1166,8 +1197,15 @@ private:
         }
         settings.setValue("releaseShortcutsMigrated",true);
         settings.setValue("defaultsLanguage",english ? "en" : "es");
+        if(!settings.value("incrementalRotationShortcutMigrated",false).toBool()) {
+            settings.remove("rotateClockwiseAction");
+            settings.setValue("incrementalRotationShortcutMigrated",true);
+        }
         for(auto action:findChildren<QAction*>()) {
             auto name=action->objectName();
+            if(action->property("rotation").isValid()) {
+                action->setShortcut(QKeySequence()); settings.remove(name); continue;
+            }
             if(action->text().trimmed().isEmpty() || name.isEmpty() || name.startsWith("recentFile") || name=="menuFindAction" || name=="searchAction" || action->isSeparator()) continue;
             shortcutActions.append(action); action->setProperty("defaultShortcut",action->shortcut().toString(QKeySequence::PortableText));
             if(name=="highlightAction" && !settings.value("highlightShortcutMigrated",false).toBool()) {
@@ -1178,7 +1216,7 @@ private:
         }
     }
     void updateToolTips() {
-        for(const auto& name:{"editTool0","editTool1","editTool2","editTool3","highlightAction","underlineAction"}) {
+        for(const auto& name:{"editTool0","editTool1","editTool2","editTool3","highlightAction","underlineAction","rotateClockwiseAction"}) {
             auto action=findChild<QAction*>(name); if(!action) continue;
             QString tip=action->text(); if(!action->shortcut().isEmpty()) tip+=" ("+action->shortcut().toString(QKeySequence::NativeText)+")";
             action->setToolTip(tip);
@@ -1473,7 +1511,17 @@ private:
         Q_UNUSED(confirm);
         if(path.isEmpty()) return;
         path=QFileInfo(path).absoluteFilePath();
-        for(int i=0;i<int(documents.size());++i) if((i==activeDocument ? source : documents[i]->path).compare(path,Qt::CaseInsensitive)==0) { switchDocument(i); return; }
+        for(int i=0;i<int(documents.size());++i) if((i==activeDocument ? source : documents[i]->path).compare(path,Qt::CaseInsensitive)==0) {
+            if(!switchDocument(i) || !view->finishText() || !pdf.diskChanged(path)) return;
+            if(!confirmDiscard()) return;
+            stopAutoScroll();
+            documents[i]->discardOnExit=false;
+            int page=pdf.pageIndex();
+            if(!pdf.reload(path)) { error(pdf.error()); return; }
+            pdf.setPage(std::min(page,pdf.pageCount()-1));
+            resetSearch(); view->newDocument(); refresh(); refreshPersonalBookmarks(); updateDocumentTabs(); saveSession();
+            return;
+        }
         auto document=std::make_unique<DocumentState>();
         if(!document->stored.open(path)) {
             bool accepted=false;

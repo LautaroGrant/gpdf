@@ -697,6 +697,10 @@ Created by Lautaro Grant</translation>
       <translation>90° clockwise</translation>
     </message>
     <message>
+      <source>Girar 90° a la derecha</source>
+      <translation>Rotate 90° clockwise</translation>
+    </message>
+    <message>
       <source>180°</source>
       <translation>180°</translation>
     </message>

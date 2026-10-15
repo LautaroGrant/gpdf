@@ -31,6 +31,8 @@ int main(int argc,char** argv) {
         settings.setValue("shortcuts/focusSearch","Ctrl+Alt+F");
         settings.setValue("shortcuts/toggleAnnotations","Ctrl+A");
         settings.setValue("shortcuts/underlineAction","");
+        settings.setValue("shortcuts/viewRotation1","Ctrl+R");
+        settings.setValue("shortcuts/rotateClockwiseAction","R");
         settings.setValue("shortcuts/saveFileAction","Ctrl+Alt+G"); settings.sync();
         Window window; window.show(); app.processEvents();
         require(currentUiLanguage()==language,"startup language applied");
@@ -39,6 +41,14 @@ int main(int argc,char** argv) {
         require(window.findChild<QPushButton*>("addPersonalBookmarkButton")->text()==(english ? "Add" : "Añadir"),"personal bookmark add label translated");
         require(window.findChild<QComboBox*>("viewMode")->itemText(0)==(english ? "Continuous view" : "Vista continua"),"view mode translation");
         require(window.findChild<QLineEdit*>("searchInput")->placeholderText()==(english ? "Search text…" : "Texto a buscar…"),"search translation");
+        auto rotate=window.findChild<QAction*>("rotateClockwiseAction");
+        require(rotate && rotate->shortcut()==QKeySequence("Ctrl+R"),"rotation shortcut in both languages");
+        require(rotate->text()==(english ? "Rotate 90° clockwise" : "Girar 90° a la derecha"),"rotation tooltip translation");
+        for(int turn=0;turn<4;++turn) {
+            auto orientation=window.findChild<QAction*>(QString("viewRotation%1").arg(turn));
+            require(orientation && orientation->shortcut().isEmpty() && !orientation->property("defaultShortcut").isValid(),"fixed orientations are excluded from configurable shortcuts in both languages");
+        }
+        settings.sync(); require(!settings.contains("shortcuts/viewRotation1"),"obsolete saved rotation shortcut removed");
         require(window.findChild<QAction*>("focusSearch")->shortcut()==QKeySequence("Ctrl+Alt+F"),"custom search shortcut preserved");
         require(window.findChild<QAction*>("saveFileAction")->shortcut()==QKeySequence("Ctrl+Alt+G"),"custom save shortcut survives legacy migration");
         const QHash<QString,QString> expectedShortcuts={{"saveFileAction",english ? "Ctrl+S" : "Ctrl+G"},{"saveAsFileAction",english ? "Ctrl+Shift+S" : "Ctrl+Shift+G"},{"highlightAction",english ? "Ctrl+H" : "Ctrl+S"},{"secondaryHighlightAction",english ? "Ctrl+Shift+H" : "Ctrl+Shift+S"},{"focusSearch",english ? "Ctrl+F" : "Ctrl+B"},{"goPage",english ? "Ctrl+G" : "Ctrl+I"},{"toggleAnnotations","Ctrl+N"},{"underlineAction","Ctrl+U"}};

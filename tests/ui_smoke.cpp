@@ -37,6 +37,41 @@ int main(int argc,char** argv) {
     }
     try {
         auto require=[](bool ok,const char* message){ if(!ok) throw std::runtime_error(message); };
+        if(app.arguments().size()==4 && app.arguments()[1]=="--selection-probe") {
+            PdfDocument document; require(document.open(app.arguments()[2]),"open selection probe");
+            PageView canvas(document); canvas.newDocument(); canvas.setMode(PageView::Single);
+            canvas.setViewportSize({900,1100}); canvas.setFit(PageView::Page);
+            QDir().mkpath(app.arguments()[3]); int checked=0;
+            for(int page=0;page<document.pageCount();++page) {
+                require(document.setPage(page),"activate probe page");
+                for(const auto& query:{"DATOS","Nombre","SINIESTRO","Documento","Localidad"}) {
+                    auto matches=document.searchPage(page,query); if(matches.isEmpty()) continue;
+                    auto point=matches.first().rectangles.first().center();
+                    for(int turn=0;turn<4;++turn) {
+                        canvas.setRotation(turn); auto device=canvas.devicePoint(point);
+                        QMouseEvent twice(QEvent::MouseButtonDblClick,device,canvas.mapToGlobal(device.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+                        QApplication::sendEvent(&canvas,&twice);
+                        auto word=document.selectionText(canvas.first,canvas.last);
+                        require(word.contains(query,Qt::CaseInsensitive),"real PDF double click selects the complete word");
+                        QMouseEvent release(QEvent::MouseButtonRelease,device,canvas.mapToGlobal(device.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+                        QApplication::sendEvent(&canvas,&release);
+                        QMouseEvent third(QEvent::MouseButtonPress,device,canvas.mapToGlobal(device.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+                        QApplication::sendEvent(&canvas,&third); QApplication::sendEvent(&canvas,&release);
+                        auto line=document.selectionText(canvas.first,canvas.last);
+                        require(line.contains(word) && !line.contains('\n') && !line.contains('\r'),"real PDF triple click stays on the visual line");
+                        if(QString(query)=="DATOS") require(line.size()>word.size(),"real PDF triple click extends beyond the word");
+                        if(page==0 && turn==0 && QString(query)=="DATOS") {
+                            canvas.show(); app.processEvents(); canvas.workers.waitForDone(); app.processEvents();
+                            require(canvas.grab().save(app.arguments()[3]+"/line-selection.png"),"save real PDF selection preview");
+                        }
+                        ++checked;
+                    }
+                }
+            }
+            require(checked>0,"selection probe found text");
+            std::cout<<"PASS: "<<checked<<" real PDF word/line click checks across "<<document.pageCount()<<" pages and four rotations.\n";
+            return 0;
+        }
         QString instanceKey="GPDF-test-"+QString::number(QCoreApplication::applicationPid());
         SingleInstance instance(instanceKey);
         require(instance.start({})==SingleInstance::Primary,"single instance becomes owner");
@@ -63,8 +98,35 @@ int main(int argc,char** argv) {
             if(!output.isEmpty()) require(pdf.saveCopy(output+"/views-sample.pdf"),"save view demonstration");
         }
         { QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.setValue("shortcuts/highlightAction","Ctrl+H"); settings.setValue("shortcuts/saveFileAction","Ctrl+S"); settings.setValue("shortcuts/saveAsFileAction","Ctrl+Shift+S"); settings.setValue("shortcuts/goPage","Ctrl+G"); settings.setValue("shortcuts/editSelectedAnnotationAction","F2"); }
+        {
+            Window emptyWindow;
+            emptyWindow.show();
+            app.processEvents();
+            require(emptyWindow.statusBar()->isHidden(),"status description bar stays hidden");
+            for(const auto size:{QSize(800,600),QSize(640,480),QSize(1024,768)}) {
+                emptyWindow.resize(size); app.processEvents(); app.processEvents();
+                auto area=emptyWindow.findChild<QScrollArea*>();
+                require(area->horizontalScrollBar()->maximum()==0 && area->verticalScrollBar()->maximum()==0,"empty start fits small viewport without scrolling");
+            }
+        }
+        {
+            const auto external=directory.path()+"/external.pdf";
+            PdfDocument original; require(original.createSample(1) && original.saveCopy(external),"external replacement fixture");
+            Window reader; reader.openDocument(external);
+            PageView* canvas=nullptr;
+            for(auto widget:reader.findChildren<QWidget*>()) if(auto candidate=dynamic_cast<PageView*>(widget)) canvas=candidate;
+            require(canvas && !canvas->pdf.diskChanged(external),"unchanged file recognized");
+            PdfDocument replacement; require(replacement.open(external) && replacement.freeText({70,500},"External replacement") && replacement.saveCopy(external),"replace open PDF externally");
+            require(canvas->pdf.diskChanged(external),"external replacement detected");
+            reader.openDocument(external);
+            require(reader.findChild<QTabBar*>("documentTabs")->count()==1,"reopen keeps same tab");
+            require(canvas->pdf.annotationContents(canvas->pdf.annotationCount()-1)=="External replacement","reopen reloads new contents");
+            require(!canvas->pdf.diskChanged(external),"reloaded fingerprint updated");
+        }
+
         Window window;
         window.show();
+
         for(auto button:window.findChildren<QPushButton*>()) require(button->text()!="Aplicar a la anotación seleccionada","drawing menus omit apply-to-selected action");
         require(window.findChild<QSpinBox*>("highlightOpacity")->value()==60,"default highlight opacity is sixty percent");
         {
@@ -141,9 +203,13 @@ int main(int argc,char** argv) {
             require(translated.button(QDialogButtonBox::Save)->text().remove('&')=="Guardar" && translated.button(QDialogButtonBox::Cancel)->text().remove('&')=="Cancelar","standard Qt buttons translated into Spanish");
             QKeySequenceEdit shortcut; require(shortcut.findChild<QLineEdit*>()->placeholderText()=="Presionar un atajo","shortcut placeholder translated into neutral Spanish");
         }
-        {
-            // Synthetic cropped pages, including an intrinsic PDF rotation.
-            QByteArray content="BT /F1 20 Tf 200 600 Td (Cropped selection alignment) Tj 0 -40 Td (Second line stays separate) Tj ET\n";
+        for(const QByteArray& content : QList<QByteArray>{
+            "BT /F1 20 Tf 200 600 Td (Cropped selection alignment) Tj 0 -40 Td (Second line stays separate) Tj ET\n",
+            "BT /F1 1 Tf 20 0 0 20 200 600 Tm (Cropped selection alignment) Tj 0 -2 Td (Second line stays separate) Tj ET\n",
+            "q 20 0 0 20 0 0 cm BT /F1 1 Tf 10 30 Td (Cropped selection alignment) Tj 0 -2 Td (Second line stays separate) Tj ET Q\n",
+            "BT /F1 100 Tf .2 0 0 .2 200 600 Tm (Cropped selection alignment) Tj 0 -200 Td (Second line stays separate) Tj ET\n",
+            "BT /F1 1 Tf 0 20 -20 0 200 300 Tm (Cropped selection alignment) Tj 0 -2 Td (Second line stays separate) Tj ET\n"}) {
+            // Font, text matrix and page matrix scales must give identical selections.
             QList<QByteArray> objects={"<< /Type /Catalog /Pages 2 0 R >>","<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [100 200 500 750] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [100 200 500 750] /Rotate 90 /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
@@ -334,6 +400,15 @@ int main(int argc,char** argv) {
         require(inlineInput && inlineSize && !QApplication::activeModalWidget(),"text editor opens on page without modal dialog");
         require(inlineInput->placeholderText()=="Escribir aquí…","inline text placeholder omits keyboard instructions");
         require(view->textStyle.family=="Arial" && view->textStyle.color==Qt::black,"Arial and black are defaults");
+        auto letterAction=window.findChild<QAction*>("rotateClockwiseAction");
+        letterAction->setShortcut(QKeySequence(Qt::Key_R));
+        inlineInput->setFocus();
+        for(auto modifiers:{Qt::KeyboardModifiers(Qt::NoModifier),Qt::KeyboardModifiers(Qt::ShiftModifier)}) {
+            QKeyEvent letter(QEvent::KeyPress,Qt::Key_R,modifiers,modifiers==Qt::NoModifier ? "r" : "R");
+            QApplication::sendEvent(inlineInput,&letter);
+        }
+        require(inlineInput->toPlainText()=="rR" && view->rotation==0 && view->pdf.annotationCount()==beforeInline,"single letter shortcuts preserve actual inline annotation draft");
+        letterAction->setShortcut(QKeySequence("Ctrl+R"));
         inlineInput->setPlainText("Texto directo con acentos: acción"); inlineSize->setValue(22);
         for(auto a:view->findChildren<QAction*>()) if(a->text()=="Azul") a->trigger();
         save->trigger();
@@ -492,6 +567,53 @@ int main(int argc,char** argv) {
             require(view->pageRects[0].width()==(rotation%2 ? 842 : 595),"rotation updates page dimensions");
         }
         window.findChild<QAction*>("viewRotation0")->trigger();
+        auto rotate=window.findChild<QAction*>("rotateClockwiseAction");
+        view->setFocus();
+        auto centerTools=window.findChild<QToolBar*>("centerTools");
+        auto rotateButton=qobject_cast<QToolButton*>(centerTools->widgetForAction(rotate));
+        require(rotate && rotate->shortcut()==QKeySequence("Ctrl+R") && !rotate->icon().isNull()
+                && rotateButton->toolButtonStyle()==Qt::ToolButtonIconOnly,"rotation button and default shortcut");
+        for(int turn=1;turn<=4;++turn) {
+            QKeyEvent rotateKey(QEvent::KeyPress,Qt::Key_R,Qt::ControlModifier);
+            QApplication::sendEvent(view,&rotateKey);
+            require(view->rotation==turn%4,"Ctrl R rotates clockwise and wraps at 360 degrees");
+        }
+        rotate->setShortcut(QKeySequence(Qt::Key_R));
+        auto annotationQuery=window.findChild<QLineEdit*>("annotationSearch");
+        auto pageEditor=window.findChild<QSpinBox*>("pageNumber")->findChild<QLineEdit*>();
+        auto zoomEditor=window.findChild<QSpinBox*>("zoomPercent")->findChild<QLineEdit*>();
+        for(QWidget* editor : QList<QWidget*>{searchInput,annotationQuery,pageEditor,zoomEditor}) {
+            auto input=qobject_cast<QLineEdit*>(editor);
+            auto previousText=input->text();
+            editor->setFocus();
+            QKeyEvent overrideKey(QEvent::ShortcutOverride,Qt::Key_R,Qt::NoModifier,"r");
+            QApplication::sendEvent(editor,&overrideKey);
+            require(overrideKey.isAccepted(),"text fields reserve letters from QAction shortcuts");
+            QKeyEvent typingKey(QEvent::KeyPress,Qt::Key_R,Qt::NoModifier,"r");
+            QApplication::sendEvent(editor,&typingKey);
+            require(view->rotation==0,"custom single letter shortcut does not interrupt typing");
+            if(editor==searchInput || editor==annotationQuery) require(input->text().contains('r'),"search fields receive assigned shortcut letter");
+            if(QApplication::focusWidget()==editor) {
+                QKeyEvent bubbledKey(QEvent::KeyPress,Qt::Key_R,Qt::NoModifier,"r");
+                QApplication::sendEvent(editor->parentWidget(),&bubbledKey);
+                require(view->rotation==0,"editor focus protects keys propagated to parent widgets");
+            }
+            input->setText(previousText);
+        }
+        searchInput->clear();
+        auto zoomControl=window.findChild<QSpinBox*>("zoomPercent");
+        int previousZoom=zoomControl->value(); zoomControl->setValue(100);
+        zoomEditor->setFocus();
+        QKeyEvent incrementZoom(QEvent::KeyPress,Qt::Key_Up,Qt::NoModifier);
+        QApplication::sendEvent(zoomEditor,&incrementZoom);
+        require(zoomControl->value()==110 && view->rotation==0,"spin box arrow navigation remains available while letter shortcut is assigned");
+        zoomControl->setValue(previousZoom);
+        view->setFocus();
+        QKeyEvent rotateLetter(QEvent::KeyPress,Qt::Key_R,Qt::NoModifier);
+        QApplication::sendEvent(view,&rotateLetter);
+        require(view->rotation==1,"custom letter shortcut works in document");
+        rotate->setShortcut(QKeySequence("Ctrl+R"));
+        window.findChild<QAction*>("viewRotation0")->trigger();
         window.findChild<QAction*>("menuPageMode2")->trigger(); require(view->mode==PageView::Double,"view mode submenu controls toolbar");
         window.findChild<QAction*>("menuPageMode0")->trigger(); require(view->mode==PageView::Continuous,"continuous mode from View menu");
         snapshot("toolbar-inline");
@@ -578,6 +700,16 @@ int main(int argc,char** argv) {
             NativeScrollCursor::cursor(NativeScrollCursor::Down).pixmap().save(output+"/native-scroll-down.png");
         }
 #endif
+        auto previousFit=view->fit; double previousScale=view->scale;
+        view->setFit(PageView::Manual); view->setZoom(3.0); app.processEvents();
+        auto horizontalBar=scrollArea->horizontalScrollBar();
+        horizontalBar->setValue(0);
+        require(horizontalBar->maximum()>0,"wide PDF enables horizontal autoscroll");
+        QCursor::setPos(global+QPoint(150,0)); QMetaObject::invokeMethod(autoTimer,"timeout");
+        require(horizontalBar->value()>0,"cursor right of anchor scrolls horizontally");
+        QCursor::setPos(global-QPoint(150,0)); QMetaObject::invokeMethod(autoTimer,"timeout");
+        require(horizontalBar->value()==0,"cursor left of anchor scrolls back");
+        view->setZoom(previousScale); view->setFit(previousFit); app.processEvents();
         QCursor::setPos(global+QPoint(0,150));
         int before=scrollArea->verticalScrollBar()->value(); QMetaObject::invokeMethod(autoTimer,"timeout");
         require(scrollArea->verticalScrollBar()->value()>before,"cursor below anchor scrolls down");
@@ -637,9 +769,24 @@ int main(int argc,char** argv) {
         require(view->pdf.annotationCount()==beforeEnter+1 && view->pdf.annotationContents(beforeEnter)=="Primera\nSegunda","Enter commits inline text with newline");
         window.findChild<QAction*>("undoAction")->trigger();
         bool commentAccepted=false;
+        rotate->setShortcut(QKeySequence(Qt::Key_R));
         QTimer::singleShot(0,[&]{ auto dialog=qobject_cast<QInputDialog*>(QApplication::activeModalWidget()); if(!dialog) return; auto input=dialog->findChild<QPlainTextEdit*>(); if(!input) { dialog->reject(); return; } input->setPlainText("Comentario"); input->moveCursor(QTextCursor::End); QApplication::sendEvent(input,&newline); input->insertPlainText("Segunda"); QApplication::sendEvent(input,&enter); if(dialog->isVisible()) dialog->reject(); });
         auto commentValue=studyMultilineText(&window,"Comentario de prueba",{},&commentAccepted);
         require(commentAccepted && commentValue=="Comentario\nSegunda","comments use Enter to accept and Shift Enter for newline");
+        bool letterCommentAccepted=false;
+        QTimer::singleShot(0,[&]{
+            auto dialog=qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+            if(!dialog) return;
+            auto input=dialog->findChild<QPlainTextEdit*>();
+            if(!input) { dialog->reject(); return; }
+            QKeyEvent letter(QEvent::KeyPress,Qt::Key_R,Qt::NoModifier,"r");
+            QApplication::sendEvent(input,&letter);
+            require(input->toPlainText()=="r" && view->rotation==0,"comment dialog receives letter assigned to global shortcut");
+            dialog->accept();
+        });
+        auto letterComment=studyMultilineText(&window,"Comentario con atajo",{},&letterCommentAccepted);
+        require(letterCommentAccepted && letterComment=="r","comment text survives single letter shortcut");
+        rotate->setShortcut(QKeySequence("Ctrl+R"));
         require(window.findChild<QAction*>("selectAllAction")->shortcut()==QKeySequence("Ctrl+Shift+A"),"select all shortcut changed");
         QKeyEvent annotationsKey(QEvent::KeyPress,Qt::Key_N,Qt::ControlModifier); bool visible=window.findChild<QAction*>("toggleAnnotations")->isChecked(); QApplication::sendEvent(view,&annotationsKey);
         require(window.findChild<QAction*>("toggleAnnotations")->isChecked()!=visible,"Ctrl N toggles annotations");
@@ -654,9 +801,13 @@ int main(int argc,char** argv) {
         QTimer::singleShot(0,[&]{ for(auto widget:QApplication::topLevelWidgets()) if(widget->objectName()=="shortcutsDialog") {
             auto dialog=qobject_cast<QDialog*>(widget); auto table=dialog->findChild<QTableWidget*>("shortcutsTable"); shortcutsShown=table && table->rowCount()>30;
             int f2Count=0; QHash<QString,QString> assignedShortcuts;
+            int rotationCount=0;
             for(int row=0;row<table->rowCount();++row) {
                 require(!table->item(row,0)->text().trimmed().isEmpty(),"every shortcut has a visible function name");
+                auto title=table->item(row,0)->text();
+                require(title!="Original" && title!="90° a la derecha" && title!="180°" && title!="90° a la izquierda","fixed orientations are absent from shortcut configuration");
                 auto key=qobject_cast<QKeySequenceEdit*>(table->cellWidget(row,1))->keySequence();
+                if(title=="Girar 90° a la derecha") { ++rotationCount; require(key==QKeySequence("Ctrl+R"),"incremental rotation uses Ctrl R"); }
                 if(!key.isEmpty()) {
                     auto sequence=key.toString(QKeySequence::PortableText); auto name=table->item(row,0)->text();
                     if(assignedShortcuts.contains(sequence)) require(sequence=="Return" && ((name.startsWith("Confirmar texto") && assignedShortcuts[sequence].startsWith("Buscar /")) || (name.startsWith("Buscar /") && assignedShortcuts[sequence].startsWith("Confirmar texto"))),"shortcut assignments have no overlapping functions");
@@ -665,6 +816,7 @@ int main(int argc,char** argv) {
                 if(key==QKeySequence("F2")) { ++f2Count; require(table->item(row,0)->text()=="Comentario","F2 belongs only to Comentario"); }
             }
             require(f2Count==1 && window.findChild<QAction*>("editSelectedAnnotationAction")->shortcut().isEmpty(),"legacy invisible F2 does not conflict");
+            require(rotationCount==1,"shortcut configuration has exactly one rotation action");
             for(int row=0;row<table->rowCount();++row) if(table->item(row,0)->text()=="Final del documento") qobject_cast<QKeySequenceEdit*>(table->cellWidget(row,1))->setKeySequence(QKeySequence("Alt+End"));
             dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
         } });
@@ -949,11 +1101,33 @@ int main(int argc,char** argv) {
         QSettings sessionSettings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
         QString sessionRoot=QFileInfo(sessionSettings.fileName()).absolutePath()+"/recovery";
         auto sessionEntry=[](QString path) { return QJsonObject{{"path",path},{"id",QUuid::createUuid().toString(QUuid::WithoutBraces)}}; };
-        auto writeManifest=[&](QJsonArray entries,int active,QString activeId=QString()) {
+        auto writeManifest=[&](QJsonArray entries,int active,QString activeId=QString(),bool clean=false) {
             QDir().mkpath(sessionRoot); QFile file(sessionRoot+"/session.json"); require(file.open(QIODevice::WriteOnly),"write recovery regression manifest");
-            auto bytes=QJsonDocument(QJsonObject{{"documents",entries},{"active",active},{"activeId",activeId}}).toJson(); require(file.write(bytes)==bytes.size(),"write complete regression manifest");
+            auto bytes=QJsonDocument(QJsonObject{{"documents",entries},{"active",active},{"activeId",activeId},{"clean",clean}}).toJson(); require(file.write(bytes)==bytes.size(),"write complete regression manifest");
         };
         auto missing=sessionEntry(directory.path()+"/missing.pdf"), firstEntry=sessionEntry(fixture), secondEntry=sessionEntry(second);
+        writeManifest({firstEntry,secondEntry},0,{},true);
+        {
+            Window restarted; restarted.restoreSession();
+            require(restarted.findChild<QTabBar*>("documentTabs")->count()==0,"legacy clean session does not reopen previous documents");
+        }
+        {
+            Window closing; closing.show(); closing.openDocument(fixture); closing.openDocument(second);
+            PageView* closingView=nullptr;
+            for(auto widget:closing.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) closingView=page;
+            require(closingView && closingView->pdf.note({60,650},"Unsaved close regression"),"create pending close edit");
+            QTimer::singleShot(0,[]{ if(auto dialog=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) dialog->button(QMessageBox::Cancel)->click(); });
+            require(!closing.close() && closing.saveSession(),"cancelled close keeps checkpoint recovery active");
+            require(SessionStore::read(QDir(sessionRoot))["documents"].toArray().size()==2,"cancelled close preserves open documents");
+            QTimer::singleShot(0,[]{ if(auto dialog=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) dialog->button(QMessageBox::Discard)->click(); });
+            require(closing.close() && closing.saveSession(),"normal close succeeds and ignores late checkpoints");
+            auto closedSession=SessionStore::read(QDir(sessionRoot));
+            require(closedSession["clean"].toBool() && closedSession["documents"].toArray().isEmpty(),"normal close clears document list");
+            Window restarted; restarted.restoreSession();
+            require(restarted.findChild<QTabBar*>("documentTabs")->count()==0,"normal restart opens without old tabs");
+            restarted.openDocument(fixture);
+            require(restarted.findChild<QTabBar*>("documentTabs")->count()==1,"explicitly requested document still opens after clean exit");
+        }
         writeManifest({missing,firstEntry,secondEntry},1);
         {
             Window restored; restored.restoreSession(); auto tabs=restored.findChild<QTabBar*>("documentTabs");
@@ -985,7 +1159,7 @@ int main(int argc,char** argv) {
         }
         acceptPassword=true;
         {
-            Window retried; retried.restoreSession(); auto tabs=retried.findChild<QTabBar*>("documentTabs"); require(tabs->count()==2 && passwordPrompts==2,"pending encrypted recovery retried on next launch"); tabs->setCurrentIndex(1);
+            Window retried; retried.restoreSession(); auto tabs=retried.findChild<QTabBar*>("documentTabs"); require(tabs->count()==1 && passwordPrompts==2,"pending encrypted recovery retried without reopening closed saved files");
             PageView* recoveredView=nullptr; for(auto widget:retried.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) recoveredView=page;
             require(recoveredView && recoveredView->pdf.dirty(),"retried recovery retains pending edits");
         }
@@ -1170,7 +1344,7 @@ int main(int argc,char** argv) {
             if(!output.isEmpty()) { canvas->workers.waitForDone(); app.processEvents(); reader.grab().save(output+"/underline-and-annotations.png"); }
             reader.findChild<QAction*>("saveFileAction")->trigger(); require(reader.saveSession(true),"save underline reading session");
             Window next; next.restoreSession(); PageView* nextCanvas=nullptr; for(auto widget:next.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) nextCanvas=page;
-            require(next.findChild<QComboBox*>("annotationTypeFilter")->currentIndex()==6,"underline filter restored across sessions");
+            require(next.findChild<QTabBar*>("documentTabs")->count()==0 && next.findChild<QComboBox*>("annotationTypeFilter")->currentIndex()==0,"clean exit starts without old files or document filters");
             require(nextCanvas->underlineWidth==4 && nextCanvas->underlineColor.rgb()==QColor("#cc2244").rgb(),"underline settings persist across windows");
         }
         {

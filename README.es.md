@@ -1,4 +1,4 @@
-# GPDF 0.2.7
+# GPDF 0.2.8
 
 [English](README.md)
 
@@ -8,17 +8,17 @@ GPDF (antes StudyPDF) es un lector de PDF para estudiar en Windows x64, construi
 
 Para utilizar GPDF, obtener el instalador o el paquete portable completo de la distribución de la versión. Las rutas `dist/` indicadas abajo son resultados de una compilación local; los binarios no están incluidos en el repositorio de código fuente.
 
-1. Ejecutar `GPDF-0.2.7-Setup.exe` en Windows x64.
+1. Ejecutar `GPDF-0.2.8-Setup.exe` en Windows x64.
 2. Elegir English o Español y seleccionar la carpeta de instalación y los accesos directos.
 3. Finalizar la instalación y abrir GPDF desde el menú Inicio.
 
 Para utilizar el portable, extraer el paquete completo en una carpeta y ejecutar `GPDF.exe` dentro de ella. No se necesitan herramientas de desarrollo.
 
-El paquete portable vigente es `dist/GPDF-0.2.7/GPDF.exe`. La carpeta completa debe mantenerse junto al ejecutable; no hace falta instalar Qt. `build-info.json` identifica versión, commit de base, estado del código y hashes de los binarios.
+El paquete portable vigente es `dist/GPDF-0.2.8/GPDF.exe`. La carpeta completa debe mantenerse junto al ejecutable; no hace falta instalar Qt. `build-info.json` identifica versión, commit de base, estado del código y hashes de los binarios.
 
-El instalador de Windows está en `dist/installers/GPDF-0.2.7-Setup.exe`. Instala para el usuario actual, sin solicitar permisos de administrador, en `%LOCALAPPDATA%\Programs\GPDF` por defecto. Permite elegir otra carpeta durante la instalación y las actualizaciones. Incluye acceso en Inicio, acceso opcional en el escritorio y desinstalador. Registra GPDF como opción para abrir PDF, pero conserva el programa predeterminado elegido por el usuario. Para desinstalarlo, utilizar Aplicaciones instaladas de Windows; las preferencias y copias de recuperación se conservan.
+El instalador de Windows está en `dist/installers/GPDF-0.2.8-Setup.exe`. Instala para el usuario actual, sin solicitar permisos de administrador, en `%LOCALAPPDATA%\Programs\GPDF` por defecto. Permite elegir otra carpeta durante la instalación y las actualizaciones. Incluye acceso en Inicio, acceso opcional en el escritorio y desinstalador. Registra GPDF como opción para abrir PDF, pero conserva el programa predeterminado elegido por el usuario. Para desinstalarlo, utilizar Aplicaciones instaladas de Windows; las preferencias y copias de recuperación se conservan.
 
-Se puede generar además una variante de pruebas firmada con un certificado autofirmado a nombre de Lautaro Grant: `dist/installers/GPDF-0.2.7-Setup-TestSigned.exe`. Incluye firmas del ejecutable, instalador y desinstalador. Esta firma no es confiable automáticamente para Windows y no sustituye un certificado validado para distribución pública; detalles en `docs/test-signing.md`.
+Se puede generar además una variante de pruebas firmada con un certificado autofirmado a nombre de Lautaro Grant: `dist/installers/GPDF-0.2.8-Setup-TestSigned.exe`. Incluye firmas del ejecutable, instalador y desinstalador. Esta firma no es confiable automáticamente para Windows y no sustituye un certificado validado para distribución pública; detalles en `docs/test-signing.md`.
 
 Las actualizaciones proponen la carpeta de la instalación anterior; se puede cambiar desde el instalador. La compilación firmada de prueba anterior se eliminó durante la limpieza. Utilizar el último `Setup.exe` para esta versión; la guía de firma de pruebas explica cómo generar una nueva variante firmada.
 
@@ -32,7 +32,7 @@ El instalador comienza con English seleccionado por defecto, incluso en Windows 
 - Doble clic selecciona una palabra; triple clic selecciona su renglón visual. Selección y copia de texto; búsqueda sin distinguir mayúsculas ni acentos. Enter en el campo o sobre un resultado seleccionado avanza a la siguiente coincidencia.
 - Comentarios, cuadros de texto, resaltados, subrayados y lápiz; edición, color, borrado y deshacer/rehacer. Crear un comentario o hacer clic en su icono con Seleccionar o Comentario abre su contenido sobre la página; permite copiar texto y se cierra con ×, Esc o un clic fuera.
 - Pestañas, miniaturas, índice del PDF, marcadores personales y progreso de lectura. Las miniaturas admiten navegación con mouse y flechas. Los marcadores personales conservan la selección al navegar para poder renombrarlos o borrarlos. El clic central sobre una pestaña cierra ese documento, con aviso si tiene cambios sin guardar.
-- Recuperación de cambios y restauración de sesión. Las copias de recuperación no reemplazan el original.
+- Recuperación de cambios tras una interrupción inesperada. Las copias no reemplazan el original. Después de cerrar normalmente, el siguiente inicio no reabre los documentos anteriores.
 - Exportación de anotaciones a Markdown, texto o HTML; impresión y vista previa.
 - Interfaz oscura con páginas blancas y atajos personalizables.
 
@@ -87,10 +87,10 @@ Compilar en modo Release y ejecutar las pruebas automatizadas:
 El ejecutable queda en `build-gpdf/GPDF.exe`. Para compilar y preparar una distribución portable con bibliotecas y licencias:
 
 ```powershell
-./scripts/build.ps1 -BuildDirectory build-gpdf -Package -PackageName GPDF-0.2.7
+./scripts/build.ps1 -BuildDirectory build-gpdf -Package -PackageName GPDF-0.2.8
 ```
 
-El resultado queda en `dist/GPDF-0.2.7/`. Después de preparar ese paquete, crear el instalador y verificar instalación, actualización y desinstalación:
+El resultado queda en `dist/GPDF-0.2.8/`. Después de preparar ese paquete, crear el instalador y verificar instalación, actualización y desinstalación:
 
 ```powershell
 ./scripts/build-installer.ps1 -SkipBuild
@@ -98,7 +98,7 @@ El resultado queda en `dist/GPDF-0.2.7/`. Después de preparar ese paquete, crea
 ./scripts/validate-installer.ps1 -InstallerLanguage spanish
 ```
 
-El instalador queda en `dist/installers/GPDF-0.2.7-Setup.exe`. Como alternativa, `./scripts/build-installer.ps1` sin `-SkipBuild` compila, ejecuta las pruebas y prepara el paquete antes de generar el instalador. El nombre del instalador sigue el archivo `VERSION`; al cambiar la versión, actualizar también el nombre del paquete portable.
+El instalador queda en `dist/installers/GPDF-0.2.8-Setup.exe`. Como alternativa, `./scripts/build-installer.ps1` sin `-SkipBuild` compila, ejecuta las pruebas y prepara el paquete antes de generar el instalador. El nombre del instalador sigue el archivo `VERSION`; al cambiar la versión, actualizar también el nombre del paquete portable.
 
 Si PowerShell bloquea los scripts locales, habilitarlos para esa sesión de terminal con `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` y repetir el comando.
 
@@ -125,12 +125,12 @@ La compatibilidad de edición con Edge/Acrobat y la impresión física requieren
 
 ## Desarrollo y distribución
 
-La versión 0.2.7 utiliza Segoe UI de 10 pt y el motor de fuentes predeterminado de Qt. Incluye los iconos de aplicación y documento proporcionados por el usuario. Al ejecutar GPDF, se registra como opción para abrir PDF en la cuenta actual; no cambia el programa predeterminado. Para probar el icono de documentos, ejecutar primero el build desde su ubicación definitiva y seleccionar GPDF como aplicación predeterminada para PDF en Configuración de Windows. El icono de documentos está integrado en el ejecutable, separado del icono de aplicación.
+La versión 0.2.8 utiliza Segoe UI de 10 pt y el motor de fuentes predeterminado de Qt. Incluye los iconos de aplicación y documento proporcionados por el usuario. Al ejecutar GPDF, se registra como opción para abrir PDF en la cuenta actual; no cambia el programa predeterminado. Para probar el icono de documentos, ejecutar primero el build desde su ubicación definitiva y seleccionar GPDF como aplicación predeterminada para PDF en Configuración de Windows. El icono de documentos está integrado en el ejecutable, separado del icono de aplicación.
 
 El último menú, Ayuda, incluye Acerca de GPDF con el nombre completo, la versión y el autor.
 
 ```text
-Grant's PDF Reader versión 0.2.7
+Grant's PDF Reader versión 0.2.8
 Creado por Lautaro Grant
 ```
 

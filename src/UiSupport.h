@@ -181,6 +181,14 @@ public:
         QColor color=QApplication::palette().color(mode==QIcon::Disabled ? QPalette::Disabled : QPalette::Active,QPalette::ButtonText);
         painter->setPen(QPen(color,1.7,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin)); painter->setBrush(Qt::NoBrush);
         QPainterPath path;
+        if(tool==6) {
+            // Keep the arc in place; open the arrowhead inward like the reference.
+            painter->translate(12,12); painter->rotate(-40); painter->translate(-12,-12);
+            painter->drawArc(QRectF(5,5,14,14),0,280*16);
+            painter->translate(19,12); painter->rotate(-20); painter->translate(-19,-12);
+            path.moveTo(16,9); path.lineTo(19,12); path.lineTo(22,9);
+            painter->drawPath(path); painter->restore(); return;
+        }
         if(tool==0) { path.moveTo(5,3); path.lineTo(5,19); path.lineTo(9,15); path.lineTo(12,21); path.lineTo(15,19.5); path.lineTo(12,13.5); path.lineTo(18,13.5); path.closeSubpath(); painter->drawPath(path); }
         else if(tool==1) { path.moveTo(5,4); path.lineTo(19,4); path.quadTo(21,4,21,6); path.lineTo(21,15); path.quadTo(21,17,19,17); path.lineTo(10,17); path.lineTo(5,21); path.lineTo(5,17); path.quadTo(3,17,3,15); path.lineTo(3,6); path.quadTo(3,4,5,4); painter->drawPath(path); painter->drawLine(QPointF(7,8),QPointF(17,8)); painter->drawLine(QPointF(7,12),QPointF(14,12)); }
         else if(tool==2) { painter->drawLine(QPointF(5,5),QPointF(19,5)); painter->drawLine(QPointF(12,5),QPointF(12,20)); painter->drawLine(QPointF(8,20),QPointF(16,20)); }

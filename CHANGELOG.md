@@ -1,5 +1,21 @@
 # Cambios
 
+## Pendiente (sin commit)
+
+- Pantalla de inicio vacía ajustada al espacio disponible, sin barras de desplazamiento en ventanas pequeñas.
+- Barra inferior de descripción general oculta para ampliar el área de lectura.
+- Al volver a abrir un PDF existente se comprueba el contenido y se recarga si cambió externamente, con aviso ante anotaciones sin guardar.
+- Desplazamiento automático con clic central también hacia los costados cuando el documento supera el ancho visible.
+
+## 0.2.8 — 14 de octubre de 2026
+
+- Botón de rotación con ícono y giro acumulativo de 90° a la derecha mediante Ctrl+R, en español e inglés. Se eliminan las orientaciones fijas de la configuración de atajos.
+- Las teclas sueltas asignadas a atajos respetan la escritura en anotaciones, comentarios, buscadores y campos de entrada.
+- Selección de palabras y renglones corregida para PDFs que aplican escalas mediante matrices de texto o página.
+- El cierre normal ya no restaura los documentos anteriores al iniciar; se conserva la recuperación de cambios ante interrupciones inesperadas.
+- Agregar marcador personal se mueve a Editar, en una sección junto a Eliminar anotación seleccionada.
+- Versión, documentación, paquete portable e instalador actualizados a 0.2.8.
+
 ## 0.2.7 — 13 de octubre de 2026
 
 - Primera release pública; versión actualizada del programa, paquete portable e instalador.

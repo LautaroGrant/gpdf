@@ -164,7 +164,7 @@ public:
     void setViewportSize(QSize size) {
         bool heightChanged=viewportHeight!=size.height(); viewportHeight=size.height();
         setViewportWidth(size.width());
-        if(heightChanged && fit!=Manual) { invalidateCache(-1,true); rebuild(); update(); }
+        if(heightChanged && (fit!=Manual || !pdf.loaded())) { invalidateCache(-1,true); rebuild(); update(); }
     }
     void setViewportWidth(int width) {
         if(viewportWidth==width) return;
@@ -175,7 +175,7 @@ public:
     void rebuild() {
         if(sizes.size()!=pdf.pageCount()) { sizes.clear(); for(int i=0;i<pdf.pageCount();++i) sizes.append(pdf.pageSize(i)); }
         pageRects.fill(QRectF(),pdf.pageCount());
-        if(!pdf.loaded()) { setFixedSize(700,850); return; }
+        if(!pdf.loaded()) { setFixedSize(std::max(1,viewportWidth),std::max(1,viewportHeight)); return; }
         int start=mode==Continuous ? 0 : (mode==Double ? pdf.pageIndex()/2*2 : pdf.pageIndex());
         int end=mode==Continuous ? pdf.pageCount() : std::min(pdf.pageCount(),start+(mode==Double ? 2 : 1));
         effectiveScale=scale;

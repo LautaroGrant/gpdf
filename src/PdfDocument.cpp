@@ -4,6 +4,7 @@
 #endif
 #include "PdfDocument.h"
 #include <QFile>
+#include <QCryptographicHash>
 #include <QSaveFile>
 #include <QPainterPath>
 #include <QTextLayout>
@@ -88,6 +89,7 @@ void PdfDocument::swap(PdfDocument& other) { std::lock_guard apiGuard(pdfiumMute
     std::swap(hoverIndex_,other.hoverIndex_);
     std::swap(hoverRegions_,other.hoverRegions_);
     std::swap(bytes_,other.bytes_);
+    std::swap(diskDigest_,other.diskDigest_);
     std::swap(password_,other.password_);
     std::swap(index_,other.index_);
     std::swap(dirty_,other.dirty_);
@@ -289,7 +291,7 @@ bool PdfDocument::open(const QString& path, const QByteArray& password) {
     auto firstPage=FPDF_LoadPage(next,0);
     if(!firstPage) { FPDF_CloseDocument(next); return fail(gpdfTr("El PDF no contiene una primera página válida.")); }
     auto firstText=FPDFText_LoadPage(firstPage);
-    close(); bytes_=std::move(bytes); doc_=next; password_=password;
+    close(); diskDigest_=QCryptographicHash::hash(bytes,QCryptographicHash::Sha256); bytes_=std::move(bytes); doc_=next; password_=password;
     page_=firstPage; text_=firstText; index_=0; resetHistory(); return true;
 }
 bool PdfDocument::createSample(int pages,const QString& sampleText) { std::lock_guard apiGuard(pdfiumMutex);
@@ -391,14 +393,23 @@ QPair<int,int> PdfDocument::lineRange(int index) const {
     double x=0,y=0;
     if(!FPDFText_GetCharOrigin(text_,index,&x,&y)) return {index,index};
     const double angle=FPDFText_GetCharAngle(text_,index),dx=std::cos(angle),dy=std::sin(angle);
-    const double font=std::max(1.0,FPDFText_GetFontSize(text_,index));
+    auto pageFontSize=[&](int character) {
+        double size=FPDFText_GetFontSize(text_,character);
+        // A PDF may set a 1-point font and scale it in the text/page matrix.
+        // Origins are in page space, so the distance limits must be too.
+        FS_MATRIX matrix{};
+        if(FPDFText_GetMatrix(text_,character,&matrix))
+            size*=std::max(std::hypot(matrix.a,matrix.b),std::hypot(matrix.c,matrix.d));
+        return std::isfinite(size) ? std::max(1.0,size) : 1.0;
+    };
+    const double font=pageFontSize(index);
     auto sameLine=[&](int candidate,int neighbor) {
         const auto c=FPDFText_GetUnicode(text_,candidate);
         if(!c || c=='\r' || c=='\n') return false;
         double cx=0,cy=0,nx=0,ny=0;
         if(!FPDFText_GetCharOrigin(text_,candidate,&cx,&cy) || !FPDFText_GetCharOrigin(text_,neighbor,&nx,&ny)) return false;
         const double tolerance=std::max(2.0,font*0.35);
-        const double gap=std::max(font,FPDFText_GetFontSize(text_,candidate))*3;
+        const double gap=std::max(font,pageFontSize(candidate))*3;
         return std::abs((cx-x)*dy-(cy-y)*dx)<=tolerance && std::hypot(cx-nx,cy-ny)<=gap;
     };
     int first=index,last=index;
@@ -695,6 +706,13 @@ bool PdfDocument::ink(const QVector<QPointF>& points,const QColor& color,double 
     if (!ok) { FPDFPage_RemoveAnnot(page_, annotationCount()-1); return fail(gpdfTr("Falló la creación del trazo.")); }
     dirty_ = true; recordHistory(); return true;
 }
+bool PdfDocument::diskChanged(const QString& path) const {
+    std::lock_guard guard(pdfiumMutex);
+    QFile file(path);
+    if(!file.open(QIODevice::ReadOnly)) return false;
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    return hash.addData(&file) && hash.result()!=diskDigest_;
+}
 bool PdfDocument::saveCopy(const QString& path) { std::unique_lock apiGuard(pdfiumMutex);
     if (!doc_) return fail(gpdfTr("No hay un documento abierto."));
     QSaveFile file(path);
@@ -709,7 +727,11 @@ bool PdfDocument::saveCopy(const QString& path) { std::unique_lock apiGuard(pdfi
     const bool committed=file.commit(); const auto message=file.errorString();
     apiGuard.lock();
     if(!committed) return fail(message);
-    if(revision_==savedRevision) { dirty_=false; savedHistoryId_=savedId; }
+    if(revision_==savedRevision) {
+        dirty_=false; savedHistoryId_=savedId;
+        QFile saved(path); QCryptographicHash hash(QCryptographicHash::Sha256);
+        if(saved.open(QIODevice::ReadOnly) && hash.addData(&saved)) diskDigest_=hash.result();
+    }
     return true;
 }
 int PdfDocument::annotationCount() const { std::lock_guard apiGuard(pdfiumMutex); return page_ ? FPDFPage_GetAnnotCount(page_) : 0; }
