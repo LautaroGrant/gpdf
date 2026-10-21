@@ -163,6 +163,35 @@ private:
     }
 };
 
+// Shared vector geometry for the toolbar icon and the page cursor (24-unit grid).
+inline void drawGpdfEraser(QPainter& painter) {
+    QPainterPath body;
+    body.moveTo(3,14); body.lineTo(13,4); body.quadTo(15,2,17,4);
+    body.lineTo(21,8); body.quadTo(23,10,21,12);
+    body.lineTo(12,21); body.lineTo(8,21); body.closeSubpath();
+    painter.drawPath(body);
+    painter.drawLine(QPointF(8,9),QPointF(16.5,16.5));
+}
+
+inline QCursor gpdfEraserCursor(qreal devicePixelRatio) {
+    static QCursor cursor;
+    static qreal cachedRatio=0;
+    if(!qFuzzyCompare(cachedRatio,devicePixelRatio)) {
+        cachedRatio=devicePixelRatio;
+        QPixmap image(QSize(qRound(32*devicePixelRatio),qRound(32*devicePixelRatio)));
+        image.setDevicePixelRatio(devicePixelRatio); image.fill(Qt::transparent);
+        QPainter painter(&image); painter.setRenderHint(QPainter::Antialiasing);
+        painter.scale(32.0/24,32.0/24);
+        // White halo and fill keep the silhouette visible on light and dark pages.
+        painter.setPen(QPen(Qt::white,3.5,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
+        painter.setBrush(Qt::white); drawGpdfEraser(painter);
+        painter.setPen(QPen(QColor("#20252d"),1.7,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
+        drawGpdfEraser(painter); painter.end();
+        cursor=QCursor(image,11,28);
+    }
+    return cursor;
+}
+
 class GpdfToolIcon : public QIconEngine {
     int tool;
     QColor drawingColor;
@@ -181,6 +210,7 @@ public:
         QColor color=QApplication::palette().color(mode==QIcon::Disabled ? QPalette::Disabled : QPalette::Active,QPalette::ButtonText);
         painter->setPen(QPen(color,1.7,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin)); painter->setBrush(Qt::NoBrush);
         QPainterPath path;
+        if(tool==7) { drawGpdfEraser(*painter); painter->restore(); return; }
         if(tool==6) {
             // Keep the arc in place; open the arrowhead inward like the reference.
             painter->translate(12,12); painter->rotate(-40); painter->translate(-12,-12);

@@ -125,7 +125,26 @@ int main(int argc,char** argv) {
         }
 
         Window window;
+        auto updateCheck=window.findChild<QAction*>("checkUpdatesAction");
+        auto automaticUpdates=window.findChild<QAction*>("automaticUpdatesAction");
+        require(updateCheck && automaticUpdates && automaticUpdates->isChecked(),"update menu and automatic checks enabled by default");
+        automaticUpdates->trigger();
+        { QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+          require(!settings.value("updates/automatic",true).toBool(),"automatic update preference persisted"); }
+        automaticUpdates->trigger();
         window.show();
+        {
+            auto tools=window.findChild<QToolBar*>("editingTools");
+            auto eraser=window.findChild<QAction*>("editTool4");
+            auto pen=window.findChild<QAction*>("editTool3");
+            auto highlight=window.findChild<QAction*>("highlightAction");
+            const auto actions=tools->actions();
+            require(actions.indexOf(eraser)==actions.indexOf(pen)+1 && actions.indexOf(highlight)==actions.indexOf(eraser)+1,"eraser button between pen and highlight");
+            require(eraser->shortcut()==QKeySequence(Qt::Key_F5) && eraser->toolTip().contains("F5"),"eraser F5 shortcut and tooltip");
+            auto penButton=qobject_cast<QToolButton*>(tools->widgetForAction(pen));
+            require(penButton && penButton->menu() && !penButton->menu()->actions().contains(eraser),"eraser removed from pen dropdown");
+            require(!eraser->icon().pixmap(24,24).isNull() && !eraser->icon().pixmap(96,96).isNull(),"eraser vector icon renders at multiple sizes");
+        }
 
         for(auto button:window.findChildren<QPushButton*>()) require(button->text()!="Aplicar a la anotación seleccionada","drawing menus omit apply-to-selected action");
         require(window.findChild<QSpinBox*>("highlightOpacity")->value()==60,"default highlight opacity is sixty percent");
@@ -259,7 +278,7 @@ int main(int argc,char** argv) {
         auto button=[&](QString label){ for(auto b:window.findChildren<QPushButton*>()) if(b->text()==label) return b; return static_cast<QPushButton*>(nullptr); };
         auto edit=button("Editar"), remove=button("Borrar"), color=button("Color");
         require(list && view && edit && remove && color,"UI controls available");
-        for(int tool=0;tool<4;++tool) {
+        for(int tool=0;tool<5;++tool) {
             QKeyEvent key(QEvent::KeyPress,Qt::Key_F1+tool,Qt::NoModifier); QApplication::sendEvent(view,&key);
             require(view->tool==PageView::Tool(tool) && window.findChild<QAction*>(QString("editTool%1").arg(tool))->isChecked(),"function keys select editing tools and preserve active indication");
         }
@@ -436,7 +455,7 @@ int main(int argc,char** argv) {
         for(auto editor:view->findChildren<QWidget*>("inlineTextEditor")) require(!editor->isVisible(),"empty editor closes without replacement");
         auto center=window.findChild<QToolBar*>("centerTools");
         auto editing=window.findChild<QToolBar*>("editingTools");
-        require(center && editing && editing->actions().size()==6,"six annotation tools including underline in left group");
+        require(center && editing && editing->actions().size()==7,"seven annotation tools including eraser and underline in left group");
         require(center->widgetForAction(center->actions()[0])==mode,"view comes first in center group");
         require(center->actions()[2]->text()=="‹" && center->actions()[4]->text()=="›" && center->actions()[6]->text()=="−","pages precede zoom in center group");
         require(view->finishText(),"close pending editor");
@@ -1011,8 +1030,20 @@ int main(int argc,char** argv) {
         require(window.exportAnnotationsTo(directory.path()+"/summary.html"),"export all document annotations"); QFile summary(directory.path()+"/summary.html"); require(summary.open(QIODevice::ReadOnly),"read exported summary"); auto summaryText=QString::fromUtf8(summary.readAll()); require(summaryText.contains("Página 1") && summaryText.contains("Página 2") && summaryText.contains("Movible"),"export includes page references and text");
         view->pdf.setPage(0); auto countBefore=view->pdf.annotationCount(); view->penColor=QColor(220,30,30,180); view->penWidth=6;
         require(view->pdf.ink({{100,450},{200,450}},view->penColor,view->penWidth),"formatted ink created"); view->refresh();
-        window.findChild<QAction*>("editTool4")->trigger(); QPointF erasePoint=view->devicePoint({150,450}); QMouseEvent eraseEvent(QEvent::MouseButtonPress,erasePoint,view->mapToGlobal(erasePoint.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(view,&eraseEvent);
+        window.findChild<QAction*>("editTool4")->trigger(); QPointF erasePoint=view->devicePoint({150,450});
+        QMouseEvent hoverEraser(QEvent::MouseMove,erasePoint,view->mapToGlobal(erasePoint.toPoint()),Qt::NoButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(view,&hoverEraser);
+        require(view->tool==PageView::Eraser && view->cursor().shape()==Qt::BitmapCursor && window.findChild<QAction*>("editTool4")->isChecked() && !window.findChild<QAction*>("editTool3")->isChecked(),"eraser selected with custom cursor on page");
+        if(!output.isEmpty()) {
+            require(view->cursor().pixmap().save(output+"/eraser-cursor.png"),"save eraser cursor");
+            require(window.findChild<QAction*>("editTool4")->icon().pixmap(96,96).save(output+"/eraser-icon.png"),"save eraser vector icon");
+            snapshot("eraser-selected");
+        }
+        QMouseEvent eraseEvent(QEvent::MouseButtonPress,erasePoint,view->mapToGlobal(erasePoint.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(view,&eraseEvent);
         require(view->pdf.annotationCount()==countBefore,"eraser removes hit ink stroke"); window.findChild<QAction*>("undoAction")->trigger(); require(view->pdf.annotationCount()==countBefore+1,"eraser supports undo");
+        QMouseEvent eraseRelease(QEvent::MouseButtonRelease,erasePoint,view->mapToGlobal(erasePoint.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(view,&eraseRelease);
+        require(view->cursor().shape()==Qt::BitmapCursor,"eraser cursor persists after release");
+        QPointF outsideEraserPage(-5,-5); QMouseEvent outsideMove(QEvent::MouseMove,outsideEraserPage,view->mapToGlobal(outsideEraserPage.toPoint()),Qt::NoButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(view,&outsideMove);
+        require(view->cursor().shape()==Qt::ArrowCursor,"eraser cursor limited to page");
         {
             Window geometryWindow; geometryWindow.show(); geometryWindow.resize(1100,720); app.processEvents(); QSize savedWindowSize=geometryWindow.size(); geometryWindow.close();
             Window restoredWindow; restoredWindow.restoreWindow(); app.processEvents(); require(restoredWindow.size()==savedWindowSize,"window dimensions restored");

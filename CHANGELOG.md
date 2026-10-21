@@ -1,95 +1,81 @@
-# Cambios
+# Changelog
 
-## Pendiente (sin commit)
+## 0.2.8 — October 17, 2026
 
-- Pantalla de inicio vacía ajustada al espacio disponible, sin barras de desplazamiento en ventanas pequeñas.
-- Barra inferior de descripción general oculta para ampliar el área de lectura.
-- Al volver a abrir un PDF existente se comprueba el contenido y se recarga si cambió externamente, con aviso ante anotaciones sin guardar.
-- Desplazamiento automático con clic central también hacia los costados cuando el documento supera el ancho visible.
+### Added
 
-## 0.2.8 — 14 de octubre de 2026
+- Standalone eraser button. Removes highlights, underlines, and ink strokes with the existing undo support.
+- Automatic checks for stable updates on GitHub Releases, manual checks from Help, an automatic-check preference, and the option to skip a version.
+- Installer downloads with SHA-256 verification, progress, and cancellation. Updates use the normal prompts for unsaved documents before closing GPDF and opening the installer. Portable copies open the download page.
 
-- Botón de rotación con ícono y giro acumulativo de 90° a la derecha mediante Ctrl+R, en español e inglés. Se eliminan las orientaciones fijas de la configuración de atajos.
-- Las teclas sueltas asignadas a atajos respetan la escritura en anotaciones, comentarios, buscadores y campos de entrada.
-- Selección de palabras y renglones corregida para PDFs que aplican escalas mediante matrices de texto o página.
-- El cierre normal ya no restaura los documentos anteriores al iniciar; se conserva la recuperación de cambios ante interrupciones inesperadas.
-- Agregar marcador personal se mueve a Editar, en una sección junto a Eliminar anotación seleccionada.
-- Versión, documentación, paquete portable e instalador actualizados a 0.2.8.
+### Changed
 
-## 0.2.7 — 13 de octubre de 2026
+- PDF pages render at the monitor's physical resolution, and the render cache refreshes when display scaling changes.
+- Page images and edges align to physical pixels to avoid additional resampling, including at fractional display scales and with 90° rotations.
+- The bottom overview bar is hidden to provide more reading space.
+- Middle-click autoscroll also moves horizontally when the document is wider than the viewport.
+- The rotation button has an icon and rotates pages clockwise in 90° increments with Ctrl+R in both languages.
+- Normal shutdown no longer restores the previous documents on the next launch. Recovery of unsaved changes after unexpected interruptions remains available.
+- Add personal bookmark has moved to Edit, in a section next to Delete selected annotation.
 
-- Primera release pública; versión actualizada del programa, paquete portable e instalador.
+### Fixed
 
-## 0.2.6 — 13 de octubre de 2026
+- Reopening an existing PDF checks its contents and reloads it if it changed externally, with a prompt for unsaved annotations.
+- Single-key shortcuts respect typing in annotations, comments, search boxes, and other input fields.
+- Word and line selection now handles PDFs that apply scaling through text or page transformation matrices.
 
-- Doble clic para seleccionar palabras y triple clic para seleccionar el renglón visual, con tildes, apóstrofes, recorte y rotación.
 
-- Subrayado separado del texto; miniaturas con navegación por teclado y mouse; marcadores personales con botón Añadir y selección persistente para renombrar o borrar.
-- Enter avanza desde un resultado de búsqueda seleccionado y vuelve al primero al terminar.
-- Caché de cursor limitada a 2 MiB, miniaturas limitadas a 140×190 píxeles, exportación por partes y conservación de imágenes y modelos válidos al navegar.
-- Revisión de textos en español e inglés y restauración del filtro de subrayados entre sesiones.
+## 0.2.7 — October 13, 2026
 
-- Pestañas de documentos limitadas a 240 píxeles, con elipsis y ruta completa en el tooltip.
-- Búsqueda y paneles de navegación muestran su estado abierto/cerrado en el menú Ver.
-- Atajos predeterminados adaptados a inglés; Ctrl+N para anotaciones y Ctrl+U para subrayar en ambos idiomas, conservando personalizaciones.
-- Instalador con inglés predeterminado y selección de carpeta también en actualizaciones.
+- First public release; application version, portable package, and installer updated.
 
-- Menú Ayuda al final de la barra nativa de Windows, con Acerca de GPDF y texto centrado de versión y autor.
-- Mensaje de recuperación en español neutro.
-- Subrayado estándar PDF con color, grosor e indicador en la barra; edición, borrado, copia y deshacer/rehacer.
-- Resaltados nuevos sin cuerpo de comentario; fragmentos disponibles en el panel y la exportación.
-- Español neutro, página y tipo de anotación en negrita e indicadores de color para lápiz y resaltado.
-- Arranque con estado restaurado antes de mostrar la ventana y desplazamiento automático sin indicador fijo.
-- Iconos de aplicación y documentos PDF integrados en el ejecutable; registro por usuario para elegir GPDF como predeterminado, sin cambiar la elección automáticamente.
-- Fuente original Segoe UI de 10 puntos restaurada tras las pruebas de Inter.
+## 0.2.6 — October 13, 2026
 
-## 0.2.5 — 13 de octubre de 2026 (build local, sin commit)
+- Double-click to select words and triple-click to select a visual line, including accented characters, apostrophes, cropped pages, and rotation.
+- Underlines separated from the text; keyboard and mouse navigation for thumbnails; personal bookmarks with an Add button and persistent selection for renaming or deletion.
+- Enter advances from the selected search result and wraps to the first result at the end.
+- Cursor cache limited to 2 MiB, thumbnails limited to 140 × 190 pixels, chunked export, and reuse of valid images and models while navigating.
+- Spanish and English interface text reviewed; underline filter restored between sessions.
+- Document tabs limited to 240 pixels, with ellipsis and the full path in the tooltip.
+- Search and navigation panels show their open/closed state in the View menu.
+- Default shortcuts adapted to English; Ctrl+N for annotations and Ctrl+U for underlining in both languages, preserving custom assignments.
+- Installer defaults to English and allows folder selection during updates as well as initial installation.
+- Help menu at the end of the native Windows menu bar, with About GPDF and centered version and author information.
+- Standard PDF underlines with color, thickness, and a toolbar indicator; editing, deletion, copying, and undo/redo.
+- New highlights have no comment body; text excerpts remain available in the panel and exports.
+- Neutral Spanish, bold annotation page numbers and types, and color indicators for Pen and Highlight.
+- Startup restores the saved state before showing the window; autoscroll has no fixed indicator.
+- Application and PDF document icons embedded in the executable; per-user registration allows choosing GPDF as the default without changing that choice automatically.
 
-- Inter a 10 pt con suavizado en escala de grises y ajuste completo a píxeles.
-- Motor GDI para la interfaz de Windows: evita los bordes de color observados con DirectWrite al 100 % en esta instalación.
-- Configuración local a GPDF; se respetan plataformas y motores definidos explícitamente. No cambia fuentes instaladas ni preferencias de Windows.
-- Prueba nativa de letras C/S/P y números 1/2, en peso normal y negrita, sin franjas de color y conservando el suavizado.
+## 0.2.3 — October 12, 2026
 
-## 0.2.4 — 13 de octubre de 2026 (build local, sin commit)
+- Select can move comments within and between pages, with edge scrolling and a single undo step.
+- Middle-click a tab to close its document, preserving the unsaved-changes prompt.
+- Default search shortcut changed to Ctrl+B; the old Ctrl+F default is migrated while custom shortcuts are preserved.
+- Editable current-page field with direct navigation by page number and Enter.
 
-- Conserva la fuente Inter y los cambios de traducción del usuario; textos de la aplicación en español neutro.
-- Desplazamiento automático con un solo cursor nativo, sin indicador fijo.
-- Resaltados nuevos sin cuerpo de comentario ni popup; los fragmentos del panel y exportación se extraen del texto del PDF.
-- Página y tipo de anotación en negrita, con contenido tratado como texto literal.
-- Estado y sesión preparados antes de mostrar la ventana; se conserva el estado normal o maximizado y se descarta la minimización al iniciar.
-- Iconos de lápiz y resaltado con indicador del color seleccionado.
-- Subrayado estándar PDF después de Resaltar, con color, grosor, indicador, persistencia, borrado, copia y deshacer/rehacer.
+## 0.2.2 — October 12, 2026
 
-## 0.2.3 — 12 de octubre de 2026
+- Opening a PDF from another instance restores the maximized or normal window without losing its previous state.
+- Toolbar + and − buttons change zoom by 10 percentage points; Ctrl+wheel retains 25-point increments.
+- Comments appear in a popup over the page, accessible from Select and Comment, with text copying and dismissal through ×, Esc, or an outside click.
+- Autoscroll with an origin indicator and native Windows vertical cursors for each direction.
 
-- Seleccionar permite mover comentarios dentro de la página y entre páginas, con desplazamiento en los bordes y un único paso de deshacer.
-- Clic central sobre una pestaña para cerrar el documento, conservando el aviso de cambios sin guardar.
-- Búsqueda predeterminada con Ctrl+B; se migra el antiguo Ctrl+F y se conservan los atajos personalizados.
-- Campo editable de página actual con navegación directa por número y Enter.
+## 0.2.1 — October 12, 2026
 
-## 0.2.2 — 12 de octubre de 2026
+- Project, window, and executable renamed to GPDF.
+- Settings, recovery, single-instance handling, and existing annotation metadata retain compatibility with StudyPDF.
+- README and packaging updated; repository kept exclusively local at this stage.
 
-- Abrir un PDF desde otra instancia restaura la ventana maximizada o normal sin perder el estado anterior.
-- Botones + y − de la barra: 10 puntos porcentuales; Ctrl+rueda conserva pasos de 25.
-- Comentarios en una ventana sobre la página, accesibles desde Seleccionar y Comentario, con copia de texto y cierre mediante ×, Esc o clic fuera.
-- Desplazamiento automático con indicador de origen y cursores verticales nativos de Windows según dirección.
+## 0.2.0 — October 12, 2026
 
-## 0.2.1 — 12 de octubre de 2026
+- Startup, Window, PageView, supporting components, translations, session persistence, and export separated. Tests no longer include main.cpp.
+- Automated corpus covering 130-page documents, scanned PDFs without text, Unicode annotations, undo/redo, recovery, and reopening; originals verified with SHA-256.
+- Tool for validating personal PDFs and 64 MiB inputs without including them in the repository.
+- File reading and recovery writes moved outside PDFium's global mutex; save confirmation performed outside the lock, with revision checks to preserve concurrent changes.
+- Search results presented in batches of 64.
+- Single version source in VERSION, distribution manifest, and reorganized documentation.
 
-- Proyecto, ventana y ejecutable renombrados a GPDF.
-- Configuración, recuperación, instancia única y metadatos de anotaciones anteriores conservan compatibilidad con StudyPDF.
-- README y empaquetado actualizados; repositorio exclusivamente local.
+## 0.1 — Initial baseline
 
-## 0.2.0 — 12 de octubre de 2026
-
-- Repositorio Git local y punto de partida conservado; sin remoto ni push.
-- Separación del arranque, Window, PageView, componentes auxiliares, traducciones, persistencia de sesión y exportación. Las pruebas ya no incluyen main.cpp.
-- Corpus automatizado: 130 páginas, PDF escaneado sin texto, anotaciones Unicode, deshacer/rehacer, recuperación y reapertura; verificación de originales por SHA-256.
-- Herramienta para validar PDFs propios y entradas de 64 MiB sin incluirlos en el repositorio.
-- Lectura del archivo y escritura de recuperación fuera del mutex global de PDFium; confirmación del guardado fuera del bloqueo y control de revisión para conservar cambios concurrentes.
-- Presentación de resultados de búsqueda mediante lotes de 64 elementos.
-- Versión única en VERSION, manifiesto de distribución y documentación reorganizada.
-
-## 0.1 — Base previa
-
-Lectura, anotaciones, pestañas, búsqueda, recuperación, exportación, impresión, marcadores, modo oscuro y atajos. Auditoría y mediciones previas en docs/audit-2026-10-12.md y docs/highlight-performance.md.
+Reading, annotations, tabs, search, recovery, export, printing, bookmarks, dark mode, and shortcuts. Earlier audit and measurements: [audit](docs/audit-2026-10-12.md) and [highlight performance](docs/highlight-performance.md).

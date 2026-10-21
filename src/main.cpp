@@ -42,6 +42,7 @@ int main(int argc,char** argv) {
     if(!snapshot) window.restoreWindow(); else window.show();
     if(!snapshot && !paths.isEmpty()) window.presentForExternalOpen();
     startupReady=true; if(!pendingLaunches.isEmpty()) instance.received(pendingLaunches);
+    if(!snapshot) window.startUpdateChecks();
     if(snapshot) {
         QTimer::singleShot(300,[&]{ const bool ok=window.grab().save(arguments[3]); app.exit(ok ? 0 : 1); });
     }

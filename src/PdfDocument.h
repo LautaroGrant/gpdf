@@ -69,8 +69,8 @@ public:
     bool saveCopy(const QString& path);
     bool diskChanged(const QString& path) const;
     bool reload(const QString& path) { const auto password=password_; return open(path,password); }
-    QImage render(double scale) const;
-    QImage renderPage(int index, double scale) const;
+    QImage render(double scale,QSize pixelSize={}) const;
+    QImage renderPage(int index, double scale,QSize pixelSize={}) const;
     QSizeF pageSize(int index) const;
     QPointF pageToNormalized(int index,QPointF point) const;
     QPointF normalizedToPage(int index,QPointF point) const;

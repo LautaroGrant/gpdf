@@ -3,6 +3,7 @@
 #include "AnnotationExport.h"
 #include "SessionStore.h"
 #include "NativeScrollCursor.h"
+#include "UpdateManager.h"
 
 class Window : public QMainWindow {
 public:
@@ -164,8 +165,8 @@ public:
             a->setObjectName(QString("editTool%1").arg(i)); a->setIcon(QIcon(new GpdfToolIcon(i))); a->setShortcut(QKeySequence(Qt::Key_F1+i)); addAction(a);
             a->setCheckable(true); group->addAction(a); if(i==0) a->setChecked(true);
         }
-        auto eraser=new QAction(gpdfTr("Borrador de resaltados, subrayados y trazos"),this); eraser->setObjectName("editTool4"); eraser->setCheckable(true); group->addAction(eraser); addAction(eraser);
-        connect(eraser,&QAction::triggered,this,[this]{ if(!view->finishText()) return; view->tool=PageView::Eraser; view->resetSelection(); view->setCursor(Qt::CrossCursor); });
+        auto eraser=editingTools->addAction(QIcon(new GpdfToolIcon(7)),gpdfTr("Borrador de resaltados, subrayados y trazos")); eraser->setObjectName("editTool4"); eraser->setShortcut(QKeySequence(Qt::Key_F5)); eraser->setCheckable(true); group->addAction(eraser); addAction(eraser);
+        connect(eraser,&QAction::triggered,this,[this]{ if(!view->finishText()) { if(auto previous=findChild<QAction*>(QString("editTool%1").arg(int(view->tool)))) previous->setChecked(true); return; } view->tool=PageView::Eraser; view->resetSelection(); view->updateEraserCursor(view->mapFromGlobal(QCursor::pos())); view->update(); });
         auto highlightAction=editingAction(gpdfTr("Resaltar"),[this]{ std::lock_guard guard(PdfDocument::apiMutex()); if(!pdf.loaded() || view->first<0 || view->last<0) return; if(!pdf.highlight(view->first,view->last,view->highlightColor)) error(pdf.error()); else { view->resetSelection(); refresh(); } });
         highlightAction->setObjectName("highlightAction"); highlightAction->setIcon(QIcon(new GpdfToolIcon(4))); addAction(highlightAction);
         auto underlineAction=editingAction(gpdfTr("Subrayar"),[this]{ std::lock_guard guard(PdfDocument::apiMutex()); if(!pdf.loaded() || view->first<0 || view->last<0) return; if(!pdf.underline(view->first,view->last,view->underlineColor,view->underlineWidth)) error(pdf.error()); else { view->resetSelection(); refresh(); } });
@@ -664,8 +665,25 @@ private:
 #endif
     QMenu* helpMenu=nullptr;
     QList<QAction*> helpActions;
+    UpdateManager* updates=nullptr;
+public:
+    void startUpdateChecks() { updates->startAutomaticCheck(); }
+private:
     void createHelpActions() {
         helpMenu=new QMenu(gpdfTr("&Ayuda"),this); helpMenu->setObjectName("helpMenu");
+        updates=new UpdateManager(this);
+        auto checkUpdates=helpMenu->addAction(gpdfTr("Buscar actualizaciones…"));
+        checkUpdates->setObjectName("checkUpdatesAction"); helpActions.append(checkUpdates);
+        connect(checkUpdates,&QAction::triggered,this,[this]{ updates->check(true); });
+        auto automatic=helpMenu->addAction(gpdfTr("Buscar actualizaciones automáticamente"));
+        automatic->setObjectName("automaticUpdatesAction"); automatic->setCheckable(true);
+        QSettings updateSettings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+        automatic->setChecked(updateSettings.value("updates/automatic",true).toBool()); helpActions.append(automatic);
+        connect(automatic,&QAction::triggered,this,[this,automatic]{
+            QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+            settings.setValue("updates/automatic",automatic->isChecked()); installFileMenu();
+        });
+        helpMenu->addSeparator();
         auto languageMenu=helpMenu->addMenu(gpdfTr("Idioma")); languageMenu->setObjectName("languageMenu");
         auto languages=new QActionGroup(this); languages->setExclusive(true);
         for(const auto& language:{QString("es"),QString("en")}) {
@@ -1014,7 +1032,6 @@ private:
         else { QColor savedSecondary=settings.value("drawing/secondaryHighlightColor",view->secondaryHighlightColor).value<QColor>(); for(int i=0;i<secondary->count();++i) if(secondary->itemData(i).value<QColor>().rgb()==savedSecondary.rgb()) secondary->setCurrentIndex(i); }
         connect(colors,&QComboBox::currentIndexChanged,this,update); connect(opacity,&QSpinBox::valueChanged,this,update); if(pencil) connect(width,&QDoubleSpinBox::valueChanged,this,update); else connect(secondary,&QComboBox::currentIndexChanged,this,update);
         update();
-        if(pencil) menu->addAction(findChild<QAction*>("editTool4"));
         return menu;
     }
     void applyDarkMode(bool enabled) {
@@ -1168,6 +1185,10 @@ private:
         // This old, invisible list action used to own F2. It must not compete with Comentario.
         settings.remove("editSelectedAnnotationAction");
         settings.remove("menuFindAction");
+        if(!settings.value("eraserShortcutMigrated",false).toBool()) {
+            if(settings.contains("editTool4") && settings.value("editTool4").toString().isEmpty()) settings.remove("editTool4");
+            settings.setValue("eraserShortcutMigrated",true);
+        }
         if(!settings.value("spanishSearchShortcutMigrated",false).toBool()) {
             if(settings.value("focusSearch","Ctrl+F").toString()=="Ctrl+F") settings.setValue("focusSearch","Ctrl+B");
             settings.setValue("spanishSearchShortcutMigrated",true);
@@ -1216,7 +1237,7 @@ private:
         }
     }
     void updateToolTips() {
-        for(const auto& name:{"editTool0","editTool1","editTool2","editTool3","highlightAction","underlineAction","rotateClockwiseAction"}) {
+        for(const auto& name:{"editTool0","editTool1","editTool2","editTool3","editTool4","highlightAction","underlineAction","rotateClockwiseAction"}) {
             auto action=findChild<QAction*>(name); if(!action) continue;
             QString tip=action->text(); if(!action->shortcut().isEmpty()) tip+=" ("+action->shortcut().toString(QKeySequence::NativeText)+")";
             action->setToolTip(tip);

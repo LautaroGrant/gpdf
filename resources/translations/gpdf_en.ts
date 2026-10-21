@@ -1032,5 +1032,77 @@ Created by Lautaro Grant</translation>
     <source>Añadir</source>
     <translation>Add</translation>
   </message>
+    <message>
+      <source>Actualizaciones</source>
+      <translation>Updates</translation>
+    </message>
+    <message>
+      <source>Ya hay una comprobación o descarga en curso.</source>
+      <translation>A check or download is already in progress.</translation>
+    </message>
+    <message>
+      <source>No se pudo consultar GitHub. Comprobar la conexión e intentar más tarde.</source>
+      <translation>Could not contact GitHub. Check your connection and try again later.</translation>
+    </message>
+    <message>
+      <source>La respuesta de GitHub no es válida.</source>
+      <translation>The response from GitHub is invalid.</translation>
+    </message>
+    <message>
+      <source>GPDF está actualizado.</source>
+      <translation>GPDF is up to date.</translation>
+    </message>
+    <message>
+      <source>GPDF %1 está disponible.</source>
+      <translation>GPDF %1 is available.</translation>
+    </message>
+    <message>
+      <source>Descargar e instalar</source>
+      <translation>Download and install</translation>
+    </message>
+    <message>
+      <source>Abrir página de descarga</source>
+      <translation>Open download page</translation>
+    </message>
+    <message>
+      <source>Más tarde</source>
+      <translation>Later</translation>
+    </message>
+    <message>
+      <source>Omitir esta versión</source>
+      <translation>Skip this version</translation>
+    </message>
+    <message>
+      <source>No se pudo crear el archivo de actualización.</source>
+      <translation>Could not create the update file.</translation>
+    </message>
+    <message>
+      <source>Descargando actualización…</source>
+      <translation>Downloading update…</translation>
+    </message>
+    <message>
+      <source>Cancelar</source>
+      <translation>Cancel</translation>
+    </message>
+    <message>
+      <source>La descarga falló o no superó la verificación SHA-256. No se ejecutó ningún archivo.</source>
+      <translation>The download failed or did not pass SHA-256 verification. No file was executed.</translation>
+    </message>
+    <message>
+      <source>La actualización está lista. Cerrar GPDF y abrir el instalador? Se solicitará guardar los documentos modificados.</source>
+      <translation>The update is ready. Close GPDF and open the installer? You will be asked to save modified documents.</translation>
+    </message>
+    <message>
+      <source>No se pudo iniciar el instalador. Volver a abrir GPDF e intentar de nuevo.</source>
+      <translation>Could not start the installer. Reopen GPDF and try again.</translation>
+    </message>
+    <message>
+      <source>Buscar actualizaciones…</source>
+      <translation>Check for updates…</translation>
+    </message>
+    <message>
+      <source>Buscar actualizaciones automáticamente</source>
+      <translation>Automatically check for updates</translation>
+    </message>
 </context>
 </TS>

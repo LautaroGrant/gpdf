@@ -328,9 +328,9 @@ bool PdfDocument::setPage(int index) { std::lock_guard apiGuard(pdfiumMutex);
 }
 int PdfDocument::pageCount() const { std::lock_guard apiGuard(pdfiumMutex); return doc_ ? FPDF_GetPageCount(doc_) : 0; }
 QSizeF PdfDocument::pageSize() const { std::lock_guard apiGuard(pdfiumMutex); return page_ ? QSizeF(FPDF_GetPageWidthF(page_), FPDF_GetPageHeightF(page_)) : QSizeF(); }
-QImage PdfDocument::render(double scale) const { std::lock_guard apiGuard(pdfiumMutex);
+QImage PdfDocument::render(double scale,QSize pixelSize) const { std::lock_guard apiGuard(pdfiumMutex);
     if (!page_ || !std::isfinite(scale) || scale<=0) return {};
-    QSize size = (pageSize() * scale).toSize();
+    QSize size = pixelSize.isEmpty() ? (pageSize() * scale).toSize() : pixelSize;
     if(size.width()<=0 || size.height()<=0) return {};
     if(qint64(size.width())*size.height()>16LL*1024*1024) size=(QSizeF(size)*std::sqrt(16.0*1024*1024/(double(size.width())*size.height()))).toSize();
     QImage image(size, QImage::Format_ARGB32);
@@ -367,13 +367,13 @@ QPointF PdfDocument::normalizedToPage(int index,QPointF point) const { std::lock
     if(index!=index_) FPDF_ClosePage(page);
     return ok ? QPointF(x,y) : QPointF();
 }
-QImage PdfDocument::renderPage(int index,double scale) const { std::lock_guard apiGuard(pdfiumMutex);
+QImage PdfDocument::renderPage(int index,double scale,QSize pixelSize) const { std::lock_guard apiGuard(pdfiumMutex);
     if(!doc_ || index<0 || index>=pageCount() || !std::isfinite(scale) || scale<=0) return {};
-    if(index==index_) return render(scale);
+    if(index==index_) return render(scale,pixelSize);
     auto page=FPDF_LoadPage(doc_,index);
     if(!page) return {};
     std::unique_ptr<std::remove_pointer_t<FPDF_PAGE>,decltype(&FPDF_ClosePage)> pageGuard(page,&FPDF_ClosePage);
-    QSize size=(pageSize(index)*scale).toSize();
+    QSize size=pixelSize.isEmpty() ? (pageSize(index)*scale).toSize() : pixelSize;
     if(size.width()<=0 || size.height()<=0) return {};
     if(qint64(size.width())*size.height()>16LL*1024*1024) size=(QSizeF(size)*std::sqrt(16.0*1024*1024/(double(size.width())*size.height()))).toSize();
     QImage image(size,QImage::Format_ARGB32);

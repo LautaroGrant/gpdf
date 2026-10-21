@@ -4,5 +4,6 @@
 /build*/
 /dist/
 /aqtinstall.log
+/tests
 *.pfx
 *.p12

@@ -17,6 +17,9 @@ public:
     QColor underlineColor=QColor(40,85,180);
     double underlineWidth=1.5;
     bool darkMode=false;
+    void updateEraserCursor(QPointF position) {
+        setCursor(pageAt(position)>=0 ? gpdfEraserCursor(devicePixelRatioF()) : QCursor(Qt::ArrowCursor));
+    }
     void eraseAt(QPointF position) {
         int page=pageAt(position); if(page<0) return; activate(page);
         int index=pdf.drawingAt(pdfPoint(position),4/effectiveScale);
@@ -262,6 +265,10 @@ protected:
         return QWidget::eventFilter(target,event);
     }
     void paintEvent(QPaintEvent* event) override {
+        const double dpr=devicePixelRatioF();
+        if(!qFuzzyCompare(renderDevicePixelRatio,dpr)) {
+            renderDevicePixelRatio=dpr; invalidateCache(-1,true);
+        }
         QPainter painter(this); painter.setRenderHint(QPainter::SmoothPixmapTransform);
         painter.fillRect(event->rect(),darkMode ? QColor("#20252d") : QColor("#e9edf2"));
         if(!pdf.loaded()) { painter.setPen(QColor("#6b7280")); painter.drawText(rect(),Qt::AlignCenter,gpdfTr("Hacer clic aquí para abrir un PDF")); return; }
@@ -276,18 +283,28 @@ protected:
         for(int i=0;i<pageRects.size();++i) {
             auto r=pageRects[i];
             if(r.isEmpty() || !r.intersects(event->rect())) continue;
+            // Include the viewport/backing-store offset when aligning the image.
+            // Keep its physical size stable while scrolling at fractional DPI.
+            const auto device=painter.deviceTransform();
+            auto physical=device.mapRect(r);
+            physical=QRectF(QPointF(std::round(physical.left()),std::round(physical.top())),
+                            QSizeF(std::round(physical.width()),std::round(physical.height())));
+            r=device.inverted().mapRect(physical);
             painter.fillRect(r.translated(2,3),QColor("#d0d5dd")); painter.fillRect(r,Qt::white);
             auto image=cache.object(i);
             if(apiLock.owns_lock() && (!image || stalePages.contains(i)) && !pendingRenders.contains(i)) {
                 pendingRenders.insert(i); int generation=cacheGeneration,turn=rotation;
                 int visibleCount=std::max(1,lastVisible-firstVisible+1);
                 double pixels=std::min(12.0*1024*1024,cache.maxCost()*1024.0*0.75/(4*visibleCount));
-                auto dimensions=sizes.value(i); double area=dimensions.width()*dimensions.height();
-                double zoom=area>0 ? std::min(effectiveScale,std::sqrt(pixels/area)) : effectiveScale;
+                QSize rasterSize(int(std::lround(r.width()*dpr)),int(std::lround(r.height()*dpr)));
+                double area=double(rasterSize.width())*rasterSize.height();
+                if(area>pixels) rasterSize=(QSizeF(rasterSize)*std::sqrt(pixels/area)).toSize();
+                if(turn%2) rasterSize.transpose();
+                double zoom=effectiveScale*dpr;
                 quint64 revision=pdf.revision(); QPointer<PageView> target(this);
-                workers.start([target,i,generation,turn,zoom,revision]{
+                workers.start([target,i,generation,turn,zoom,revision,rasterSize]{
                     QImage rendered;
-                    { std::lock_guard guard(PdfDocument::apiMutex()); if(target && target->cacheGeneration==generation && i>=target->visibleFirst && i<=target->visibleLast && target->pdf.revision()==revision) rendered=target->pdf.renderPage(i,zoom); }
+                    { std::lock_guard guard(PdfDocument::apiMutex()); if(target && target->cacheGeneration==generation && i>=target->visibleFirst && i<=target->visibleLast && target->pdf.revision()==revision) rendered=target->pdf.renderPage(i,zoom,rasterSize); }
                     if(turn && !rendered.isNull()) rendered=rendered.transformed(QTransform().rotate(turn*90));
                     if(target) QMetaObject::invokeMethod(target.data(),[target,i,generation,rendered]{
                         if(!target || target->cacheGeneration!=generation) return;
@@ -364,7 +381,8 @@ protected:
         if(!(event->buttons() & Qt::LeftButton)) {
             int hoveredPage=pageAt(event->position());
             if(hoveredPage<0) { setCursor(Qt::ArrowCursor); return; }
-            if(tool==Eraser || tool==Pen || tool==Note) { setCursor(Qt::CrossCursor); return; }
+            if(tool==Eraser) { updateEraserCursor(event->position()); return; }
+            if(tool==Pen || tool==Note) { setCursor(Qt::CrossCursor); return; }
             if(tool==Text) { setCursor(Qt::IBeamCursor); return; }
             std::unique_lock apiLock(PdfDocument::apiMutex(),std::try_to_lock); if(!apiLock.owns_lock()) return;
             int index=pageAt(event->position());
@@ -377,7 +395,7 @@ protected:
             return;
         }
         if(!(event->buttons() & Qt::LeftButton) || !pdf.loaded()) return;
-        if(tool==Eraser) { eraseAt(event->position()); return; }
+        if(tool==Eraser) { updateEraserCursor(event->position()); eraseAt(event->position()); return; }
         if(tool==Select && dragCandidate) {
             dragOffset=event->position()-dragStart;
             if(dragOffset.manhattanLength()>=QApplication::startDragDistance()) draggingText=true;
@@ -407,7 +425,8 @@ protected:
         }
         draggingText=dragCandidate=false; dragOffset={};
         dragScroll->stop(); dragEdgeTicks=0;
-        setCursor(tool==Pen || tool==Note || tool==Eraser ? Qt::CrossCursor : tool==Text ? Qt::IBeamCursor : Qt::ArrowCursor);
+        if(tool==Eraser) updateEraserCursor(event->position());
+        else setCursor(tool==Pen || tool==Note ? Qt::CrossCursor : tool==Text ? Qt::IBeamCursor : Qt::ArrowCursor);
         if(tool==Pen && stroke.size()>1) { if(!pdf.ink(stroke,penColor,penWidth)) report(pdf.error()); else changed(); }
         stroke.clear(); update();
     }
@@ -468,6 +487,7 @@ private:
     QSet<int> pendingRenders;
     QSet<int> stalePages;
     bool renderRetryScheduled=false;
+    double renderDevicePixelRatio=0;
     void invalidateCache(int page=-1,bool preservePreview=false) {
         ++cacheGeneration; pendingRenders.clear();
         if(preservePreview) { if(page>=0) { if(cache.object(page) || previewCache.object(page)) stalePages.insert(page); } else { for(int key:cache.keys()) stalePages.insert(key); for(int key:previewCache.keys()) stalePages.insert(key); } }
