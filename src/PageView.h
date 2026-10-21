@@ -153,6 +153,8 @@ public:
         rebuild(); update();
     }
     void refreshNavigation() {
+        // Only fit-to-page depends on the active page in continuous mode.
+        if(mode==Continuous && fit!=Page) { update(); return; }
         const double previousScale=effectiveScale;
         rebuild();
         if(!qFuzzyCompare(previousScale,effectiveScale)) invalidateCache(-1,true);
@@ -165,15 +167,14 @@ public:
     void setRotation(int value) { hideComment(); rotation=(value%4+4)%4; invalidateCache(); rebuild(); update(); }
     QSizeF displaySize(int index) const { auto size=sizes[index]; return rotation%2 ? QSizeF(size.height(),size.width()) : size; }
     void setViewportSize(QSize size) {
-        bool heightChanged=viewportHeight!=size.height(); viewportHeight=size.height();
-        setViewportWidth(size.width());
-        if(heightChanged && (fit!=Manual || !pdf.loaded())) { invalidateCache(-1,true); rebuild(); update(); }
+        const bool widthChanged=viewportWidth!=size.width(),heightChanged=viewportHeight!=size.height();
+        if(!widthChanged && !heightChanged) return;
+        viewportWidth=size.width(); viewportHeight=size.height();
+        if((widthChanged && (mode==Double || fit!=Manual)) || (heightChanged && fit!=Manual)) invalidateCache(-1,true);
+        if(widthChanged || fit!=Manual || !pdf.loaded()) { rebuild(); update(); }
     }
     void setViewportWidth(int width) {
-        if(viewportWidth==width) return;
-        viewportWidth=width;
-        if(mode==Double || fit!=Manual) invalidateCache(-1,true);
-        rebuild(); update();
+        setViewportSize(QSize(width,viewportHeight));
     }
     void rebuild() {
         if(sizes.size()!=pdf.pageCount()) { sizes.clear(); for(int i=0;i<pdf.pageCount();++i) sizes.append(pdf.pageSize(i)); }
@@ -223,7 +224,32 @@ public:
     bool annotationDragging() const { return draggingText; }
     void cancelAnnotationDrag() { draggingText=dragCandidate=false; dragScroll->stop(); dragOffset={}; unsetCursor(); update(); }
     void resetSelection(bool preserveDrag=false) { if(!preserveDrag) cancelAnnotationDrag(); hideComment(); first=last=selectedAnnotation=-1; allTextSelected=false; stroke.clear(); }
-    int pageAt(QPointF point) const { for(int i=0;i<pageRects.size();++i) if(!pageRects[i].isEmpty() && pageRects[i].contains(point)) return i; return -1; }
+    // Continuous pages are ordered vertically. Other modes contain at most two pages.
+    QPair<int,int> pageRange(double top,double bottom) const {
+        if(pageRects.isEmpty()) return {0,0};
+        if(mode!=Continuous) {
+            const int start=mode==Double ? pdf.pageIndex()/2*2 : pdf.pageIndex();
+            return {start,std::min(int(pageRects.size()),start+(mode==Double ? 2 : 1))};
+        }
+        const auto begin=pageRects.cbegin(),end=pageRects.cend();
+        const auto first=std::lower_bound(begin,end,top,[](const QRectF& r,double y){ return r.bottom()<y; });
+        const auto last=std::upper_bound(first,end,bottom,[](double y,const QRectF& r){ return y<r.top(); });
+        return {int(first-begin),int(last-begin)};
+    }
+    int pageAt(QPointF point) const {
+        const auto range=pageRange(point.y(),point.y());
+        for(int i=range.first;i<range.second;++i) if(!pageRects[i].isEmpty() && pageRects[i].contains(point)) return i;
+        return -1;
+    }
+    int closestPage(double y) const {
+        if(pageRects.isEmpty()) return -1;
+        if(mode!=Continuous) return pdf.pageIndex();
+        const auto next=std::lower_bound(pageRects.cbegin(),pageRects.cend(),y,[](const QRectF& r,double value){ return r.bottom()<value; });
+        const int index=int(next-pageRects.cbegin());
+        if(index==pageRects.size()) return index-1;
+        if(index>0 && y<next->top() && y-pageRects[index-1].bottom()<=next->top()-y) return index-1;
+        return index;
+    }
     QRectF activeRect() const { return pdf.pageIndex()<pageRects.size() ? pageRects[pdf.pageIndex()] : QRectF(); }
     QPointF pdfPoint(QPointF point) const {
         return pdfPointOnPage(pdf.pageIndex(),point);
@@ -278,9 +304,11 @@ protected:
             renderRetryScheduled=true; QTimer::singleShot(16,this,[this]{ renderRetryScheduled=false; update(); });
         }
         QRect visible=visibleRegion().boundingRect(); int firstVisible=-1,lastVisible=-1;
-        for(int page=0;page<pageRects.size();++page) if(pageRects[page].intersects(visible)) { if(firstVisible<0) firstVisible=page; lastVisible=page; }
+        const auto visibleRange=pageRange(visible.top(),visible.bottom());
+        for(int page=visibleRange.first;page<visibleRange.second;++page) if(pageRects[page].intersects(visible)) { if(firstVisible<0) firstVisible=page; lastVisible=page; }
         visibleFirst=firstVisible; visibleLast=lastVisible;
-        for(int i=0;i<pageRects.size();++i) {
+        const auto paintRange=pageRange(event->rect().top(),event->rect().bottom());
+        for(int i=paintRange.first;i<paintRange.second;++i) {
             auto r=pageRects[i];
             if(r.isEmpty() || !r.intersects(event->rect())) continue;
             // Include the viewport/backing-store offset when aligning the image.
@@ -306,12 +334,12 @@ protected:
                     QImage rendered;
                     { std::lock_guard guard(PdfDocument::apiMutex()); if(target && target->cacheGeneration==generation && i>=target->visibleFirst && i<=target->visibleLast && target->pdf.revision()==revision) rendered=target->pdf.renderPage(i,zoom,rasterSize); }
                     if(turn && !rendered.isNull()) rendered=rendered.transformed(QTransform().rotate(turn*90));
-                    if(target) QMetaObject::invokeMethod(target.data(),[target,i,generation,rendered]{
+                    QImage preview=rendered.isNull() ? QImage() : rendered.scaled(QSize(512,512),Qt::KeepAspectRatio,Qt::SmoothTransformation);
+                    if(target) QMetaObject::invokeMethod(target.data(),[target,i,generation,rendered,preview]{
                         if(!target || target->cacheGeneration!=generation) return;
                         target->pendingRenders.remove(i);
                         int cost=std::max(1,int(rendered.sizeInBytes()/1024));
                         if(!rendered.isNull()) {
-                            QImage preview=rendered.scaled(QSize(512,512),Qt::KeepAspectRatio,Qt::SmoothTransformation);
                             target->previewCache.insert(i,new QImage(preview),std::max(1,int(preview.sizeInBytes()/1024)));
                             if(cost<=target->cache.maxCost()) { target->cache.insert(i,new QImage(rendered),cost); target->stalePages.remove(i); }
                         }
@@ -324,7 +352,7 @@ protected:
         }
         if(!apiLock.owns_lock()) return;
         painter.setPen(Qt::NoPen); painter.setBrush(QColor(65,125,220,65));
-        if(allTextSelected) for(const auto& rect:pageRects) if(!rect.isEmpty()) painter.drawRect(rect);
+        if(allTextSelected) for(int i=paintRange.first;i<paintRange.second;++i) if(!pageRects[i].isEmpty()) painter.drawRect(pageRects[i]);
         painter.setBrush(QColor(65,125,220,65));
         if(first>=0 && last>=0) for(auto r:pdf.selectionRects(first,last)) painter.drawRect(deviceRect(r));
         if(searchPage==pdf.pageIndex() && !allTextSelected && !(first>=0 && last>=0)) {
@@ -337,7 +365,6 @@ protected:
         } else if(selectedAnnotation>=0) {
             painter.setBrush(Qt::NoBrush); painter.setPen(QPen(QColor("#2563eb"),1.5,Qt::DashLine));
             auto outline=deviceRect(pdf.annotationRect(selectedAnnotation));
-            if(draggingText) outline.translate(dragOffset);
             painter.drawRect(outline.adjusted(-3,-3,3,3));
         }
         painter.setPen(QPen(penColor,penWidth*effectiveScale,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
@@ -385,7 +412,7 @@ protected:
             if(tool==Pen || tool==Note) { setCursor(Qt::CrossCursor); return; }
             if(tool==Text) { setCursor(Qt::IBeamCursor); return; }
             std::unique_lock apiLock(PdfDocument::apiMutex(),std::try_to_lock); if(!apiLock.owns_lock()) return;
-            int index=pageAt(event->position());
+            int index=hoveredPage;
             bool text=false;
             if(tool==Select && index>=0) {
                 QPointF point=pdfPointOnPage(index,event->position());
@@ -394,7 +421,7 @@ protected:
             setCursor(text ? Qt::IBeamCursor : Qt::ArrowCursor);
             return;
         }
-        if(!(event->buttons() & Qt::LeftButton) || !pdf.loaded()) return;
+        if(!pdf.loaded()) return;
         if(tool==Eraser) { updateEraserCursor(event->position()); eraseAt(event->position()); return; }
         if(tool==Select && dragCandidate) {
             dragOffset=event->position()-dragStart;
@@ -443,9 +470,6 @@ protected:
             if(first>=0) { wordClickTimer.start(); wordClickPosition=event->position(); wordClickPage=pdf.pageIndex(); wordClickRevision=pdf.revision(); }
             setFocus(); update(); event->accept();
         }
-    }
-    void keyPressEvent(QKeyEvent* event) override {
-        QWidget::keyPressEvent(event);
     }
 private:
     QElapsedTimer wordClickTimer;

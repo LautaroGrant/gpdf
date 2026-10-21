@@ -50,10 +50,14 @@ QString styleValue(const PdfDocument::TextStyle& style) { std::lock_guard apiGua
 }
 struct Writer : FPDF_FILEWRITE {
     QSaveFile* file;
+    QCryptographicHash hash{QCryptographicHash::Sha256};
     explicit Writer(QSaveFile& output) : file(&output) {
         version = 1;
         WriteBlock = [](FPDF_FILEWRITE* self, const void* data, unsigned long size) -> int {
-            return static_cast<Writer*>(self)->file->write(static_cast<const char*>(data), size) == qint64(size);
+            auto writer=static_cast<Writer*>(self);
+            if(writer->file->write(static_cast<const char*>(data),size)!=qint64(size)) return 0;
+            writer->hash.addData(QByteArrayView(static_cast<const char*>(data),qsizetype(size)));
+            return 1;
         };
     }
 };
@@ -122,9 +126,14 @@ PdfDocument::HistoryEntry PdfDocument::captureHistory() const {
                 self.tail.append(data,size); return 1;
             };
         }
-    } writer(bytes_);
+    // Restoring an entry materializes base + tail into bytes_. Keep sharing the
+    // retained base when recording a new branch instead of retaining that full copy.
+    };
+    const auto& base=historyPosition_>=0 && !history_[historyPosition_].base.isEmpty()
+        ? history_[historyPosition_].base : bytes_;
+    IncrementalWriter writer(base);
     if(!doc_ || !FPDF_SaveAsCopy(doc_,&writer,bytes_.isEmpty() ? FPDF_NO_INCREMENTAL : FPDF_INCREMENTAL)) return {};
-    return {writer.matching ? bytes_.left(writer.consumed) : QByteArray(),writer.tail,revision_};
+    return {writer.matching ? base.left(writer.consumed) : QByteArray(),writer.tail,revision_};
 }
 qint64 PdfDocument::searchCacheStorageBytes() const { std::lock_guard guard(pdfiumMutex); return searchIndex_->totalCost(); }
 qint64 PdfDocument::historyStorageBytes() const { std::lock_guard guard(pdfiumMutex);
@@ -283,6 +292,7 @@ bool PdfDocument::open(const QString& path, const QByteArray& password) {
     if (!file.open(QIODevice::ReadOnly)) { std::lock_guard apiGuard(pdfiumMutex); return fail(file.errorString()); }
     QByteArray bytes = file.readAll();
     const auto readError=file.error(); const auto readMessage=file.errorString(); file.close();
+    const auto digest=readError==QFileDevice::NoError ? QCryptographicHash::hash(bytes,QCryptographicHash::Sha256) : QByteArray();
     std::lock_guard apiGuard(pdfiumMutex);
     if(readError!=QFileDevice::NoError) return fail(readMessage);
     auto next = FPDF_LoadMemDocument64(bytes.constData(), size_t(bytes.size()), password.constData());
@@ -291,7 +301,7 @@ bool PdfDocument::open(const QString& path, const QByteArray& password) {
     auto firstPage=FPDF_LoadPage(next,0);
     if(!firstPage) { FPDF_CloseDocument(next); return fail(gpdfTr("El PDF no contiene una primera página válida.")); }
     auto firstText=FPDFText_LoadPage(firstPage);
-    close(); diskDigest_=QCryptographicHash::hash(bytes,QCryptographicHash::Sha256); bytes_=std::move(bytes); doc_=next; password_=password;
+    close(); diskDigest_=digest; bytes_=std::move(bytes); doc_=next; password_=password;
     page_=firstPage; text_=firstText; index_=0; resetHistory(); return true;
 }
 bool PdfDocument::createSample(int pages,const QString& sampleText) { std::lock_guard apiGuard(pdfiumMutex);
@@ -453,9 +463,13 @@ QVector<PdfDocument::SearchMatch> PdfDocument::searchPage(int index,const QStrin
         }
         return result;
     };
-    QString needle=fold(query).simplified();
+    QString input=query.trimmed();
+    const bool wholeWord=input.size()>=2 && input.front()=='"' && input.back()=='"';
+    if(wholeWord) input=input.mid(1,input.size()-2);
+    QString needle=fold(input).simplified();
+    const QString queryKey=(wholeWord ? QStringLiteral("W:") : QStringLiteral("P:"))+needle;
     if(needle.isEmpty()) return matches;
-    if(auto cached=searchIndex_->object(index); cached && cached->lastQuery==needle) return cached->matches;
+    if(auto cached=searchIndex_->object(index); cached && cached->lastQuery==queryKey) return cached->matches;
     if(auto cached=searchIndex_->object(index); cached && !cached->normalized.contains(needle)) return matches;
     auto page=FPDF_LoadPage(doc_,index);
     if(!page) return matches;
@@ -468,28 +482,51 @@ QVector<PdfDocument::SearchMatch> PdfDocument::searchPage(int index,const QStrin
         SearchIndex fresh;
         if(!cached) {
             auto& data=fresh; data.normalized.reserve(total); data.starts.reserve(total); data.ends.reserve(total);
+            auto append=[&](QChar c,int index) {
+                if(c.isSpace()) {
+                    if(!data.normalized.isEmpty() && data.normalized.back()==' ') { data.ends.last()=index; return; }
+                    c=' ';
+                }
+                data.normalized+=c; data.starts.append(index); data.ends.append(index);
+            };
             // Map normalized UTF-16 positions back to PDFium's character indices.
             // Removing accents must not shift the geometry of the highlighted match.
             for(int i=0;i<total;++i) {
                 char32_t codepoint=FPDFText_GetUnicode(text,i);
                 if(!codepoint) continue;
-                QString folded=codepoint<128 ? QString(QChar(ushort(codepoint))).toLower() : fold(QString::fromUcs4(&codepoint,1));
+                // ASCII needs neither Unicode normalization nor a temporary QString.
+                if(codepoint<128) { append(QChar(ushort(codepoint)).toLower(),i); continue; }
+                QString folded=fold(QString::fromUcs4(&codepoint,1));
                 if(folded.isEmpty()) { if(!data.ends.isEmpty()) data.ends.last()=i; continue; }
-                for(QChar c:folded) {
-                    if(c.isSpace()) {
-                        if(!data.normalized.isEmpty() && data.normalized.back()==' ') { data.ends.last()=i; continue; }
-                        c=' ';
-                    }
-                    data.normalized+=c; data.starts.append(i); data.ends.append(i);
-                }
+                for(QChar c:folded) append(c,i);
             }
             qsizetype cost=fresh.storageBytes();
             if(cost<=searchIndex_->maxCost()) { searchIndex_->insert(index,new SearchIndex(std::move(fresh)),cost); cached=searchIndex_->object(index); }
         }
         const auto& data=cached ? *cached : fresh;
         const auto& normalized=data.normalized; const auto& starts=data.starts; const auto& ends=data.ends;
+        auto wordCharacter=[&](int offset) {
+            if(offset<0 || offset>=normalized.size()) return false;
+            auto scalarAt=[&](int at) -> char32_t {
+                QChar c=normalized[at];
+                if(c.isHighSurrogate() && at+1<normalized.size() && normalized[at+1].isLowSurrogate())
+                    return QChar::surrogateToUcs4(c,normalized[at+1]);
+                if(c.isLowSurrogate() && at>0 && normalized[at-1].isHighSurrogate())
+                    return QChar::surrogateToUcs4(normalized[at-1],c);
+                return c.unicode();
+            };
+            auto letter=[&](int at) {
+                if(at<0 || at>=normalized.size()) return false;
+                auto c=scalarAt(at); auto category=QChar::category(c);
+                return QChar::isLetterOrNumber(c) || c=='_' || category==QChar::Mark_NonSpacing
+                    || category==QChar::Mark_SpacingCombining || category==QChar::Mark_Enclosing;
+            };
+            auto c=scalarAt(offset);
+            return letter(offset) || ((c=='\'' || c==0x2019) && letter(offset-1) && letter(offset+1));
+        };
         int position=0;
         while(!needle.isEmpty() && (position=normalized.indexOf(needle,position))>=0) {
+            if(wholeWord && (wordCharacter(position-1) || wordCharacter(position+needle.size()))) { ++position; continue; }
             int first=starts[position],count=ends[position+needle.size()-1]-first+1;
             SearchMatch match{index,first,count,{}, {}, {}};
             int start=std::max(0,first-40),length=std::min(total-start,count+80);
@@ -510,7 +547,7 @@ QVector<PdfDocument::SearchMatch> PdfDocument::searchPage(int index,const QStrin
         }
     }
     if(auto cached=searchIndex_->object(index)) {
-        SearchIndex updated=*cached; updated.lastQuery=needle; updated.matches=matches;
+        SearchIndex updated=*cached; updated.lastQuery=queryKey; updated.matches=matches;
         auto cost=updated.storageBytes();
         if(cost<=searchIndex_->maxCost()) searchIndex_->insert(index,new SearchIndex(std::move(updated)),cost);
     }
@@ -707,11 +744,12 @@ bool PdfDocument::ink(const QVector<QPointF>& points,const QColor& color,double 
     dirty_ = true; recordHistory(); return true;
 }
 bool PdfDocument::diskChanged(const QString& path) const {
-    std::lock_guard guard(pdfiumMutex);
+    QByteArray expected;
+    { std::lock_guard guard(pdfiumMutex); expected=diskDigest_; }
     QFile file(path);
     if(!file.open(QIODevice::ReadOnly)) return false;
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    return hash.addData(&file) && hash.result()!=diskDigest_;
+    return hash.addData(&file) && hash.result()!=expected;
 }
 bool PdfDocument::saveCopy(const QString& path) { std::unique_lock apiGuard(pdfiumMutex);
     if (!doc_) return fail(gpdfTr("No hay un documento abierto."));
@@ -729,8 +767,7 @@ bool PdfDocument::saveCopy(const QString& path) { std::unique_lock apiGuard(pdfi
     if(!committed) return fail(message);
     if(revision_==savedRevision) {
         dirty_=false; savedHistoryId_=savedId;
-        QFile saved(path); QCryptographicHash hash(QCryptographicHash::Sha256);
-        if(saved.open(QIODevice::ReadOnly) && hash.addData(&saved)) diskDigest_=hash.result();
+        diskDigest_=writer.hash.result();
     }
     return true;
 }

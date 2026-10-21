@@ -138,6 +138,23 @@ public:
 };
 #endif
 
+#ifdef Q_OS_WIN
+inline void applyNativeWindowTheme(HWND hwnd,bool enabled) {
+    static HMODULE dwm=LoadLibraryW(L"dwmapi.dll");
+    using SetAttribute=HRESULT (WINAPI*)(HWND,DWORD,LPCVOID,DWORD);
+    static auto setAttribute=dwm ? reinterpret_cast<SetAttribute>(GetProcAddress(dwm,"DwmSetWindowAttribute")) : nullptr;
+    if(!setAttribute) return;
+    BOOL dark=enabled;
+    setAttribute(hwnd,20,&dark,sizeof(dark));
+    // Explicit caption colors also update an already visible Windows 11 frame.
+    COLORREF caption=enabled ? RGB(37,43,53) : 0xffffffff;
+    COLORREF text=enabled ? RGB(229,231,235) : 0xffffffff;
+    setAttribute(hwnd,35,&caption,sizeof(caption));
+    setAttribute(hwnd,36,&text,sizeof(text));
+    // Repaint the caption without recalculating the frame during Qt state transitions.
+    if(!IsIconic(hwnd)) RedrawWindow(hwnd,nullptr,nullptr,RDW_FRAME|RDW_INVALIDATE|RDW_UPDATENOW);
+}
+#endif
 // Keep drawing settings below their toolbar button instead of letting Qt
 // choose an upward popup position.
 class DownwardToolMenu : public QMenu {

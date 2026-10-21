@@ -17,7 +17,7 @@
 // PDFium calls are serialized with apiMutex(); background reads validate revision().
 class PdfDocument {
 public:
-    struct AnnotationEntry { int page; int index; int type; QString text; };
+    struct AnnotationEntry { int page; int index; int type; QString text; bool operator==(const AnnotationEntry&) const = default; };
     QVector<AnnotationEntry> documentAnnotations() const;
     qint64 historyStorageBytes() const;
     qint64 searchCacheStorageBytes() const;

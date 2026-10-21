@@ -11,6 +11,18 @@ public:
         installUiTranslations();
         setWindowTitle("GPDF"); resize(1280,850);
         view = new PageView(pdf);
+        view->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(view,&QWidget::customContextMenuRequested,this,[this](QPoint position){
+            if(!pdf.loaded() || view->first<0 || view->last<0 || view->pageAt(position)!=pdf.pageIndex()
+               || pdf.selectionText(view->first,view->last).isEmpty()) return;
+            view->setFocus();
+            QMenu menu(this); menu.setObjectName("selectionContextMenu");
+            menu.addAction(findChild<QAction*>("highlightAction"));
+            menu.addAction(findChild<QAction*>("underlineAction"));
+            menu.addSeparator();
+            menu.addAction(findChild<QAction*>("copyAction"));
+            menu.exec(view->mapToGlobal(position));
+        });
         scroll = new QScrollArea;
         scroll->setWidget(view); scroll->setAlignment(Qt::AlignHCenter);
         scroll->setStyleSheet("QScrollArea { background: #e9edf2; border: 0; }");
@@ -379,6 +391,17 @@ protected:
                 if(!old.testFlag(Qt::WindowMinimized)) lastVisibleState=old & (Qt::WindowMaximized|Qt::WindowFullScreen);
             }
         }
+#ifdef Q_OS_WIN
+        if((event->type()==QEvent::WindowStateChange || event->type()==QEvent::ActivationChange)
+           && !isMinimized() && !isFullScreen() && QApplication::platformName()=="windows") {
+            QTimer::singleShot(0,this,[this]{
+                if(!isMinimized() && !isFullScreen()) {
+                    applyNativeWindowTheme(reinterpret_cast<HWND>(winId()),view->darkMode);
+                    menuBar()->update();
+                }
+            });
+        }
+#endif
         if(event->type()==QEvent::WindowStateChange && isFullScreen()) {
             installFileMenu();
             QTimer::singleShot(0,this,[this]{ if(isFullScreen()) installFileMenu(); });
@@ -431,11 +454,11 @@ protected:
             auto widget=qobject_cast<QWidget*>(object);
             // Native dialogs own their chrome; do not materialize Qt's hidden print container.
             if(widget && widget->isWindow() && !widget->testAttribute(Qt::WA_DontShowOnScreen) && !qobject_cast<QPrintDialog*>(widget)) {
-                static HMODULE dwm=LoadLibraryW(L"dwmapi.dll");
-                using SetAttribute=HRESULT (WINAPI*)(HWND,DWORD,LPCVOID,DWORD);
-                static auto setAttribute=dwm ? reinterpret_cast<SetAttribute>(GetProcAddress(dwm,"DwmSetWindowAttribute")) : nullptr;
-                BOOL dark=QApplication::palette().color(QPalette::Window).lightness()<100;
-                if(setAttribute) setAttribute(reinterpret_cast<HWND>(widget->winId()),20,&dark,sizeof(dark));
+                QPointer<QWidget> target=widget;
+                QTimer::singleShot(0,widget,[target]{
+                    if(target && target->isVisible() && !target->isMinimized() && !target->isFullScreen())
+                        applyNativeWindowTheme(reinterpret_cast<HWND>(target->winId()),QApplication::palette().color(QPalette::Window).lightness()<100);
+                });
             }
         }
 #endif
@@ -1003,13 +1026,13 @@ private:
     }
     QMenu* drawingMenu(bool pencil,QWidget* parent) {
         auto menu=new DownwardToolMenu(parent); auto panel=new QWidget; auto form=new QFormLayout(panel);
-        auto colors=new QComboBox; colors->setObjectName(pencil ? "penColor" : "highlightColor");
+        auto colors=new ViewModeCombo; colors->setObjectName(pencil ? "penColor" : "highlightColor");
         const QStringList names={gpdfTr("Negro"),gpdfTr("Azul"),gpdfTr("Rojo"),gpdfTr("Verde"),gpdfTr("Naranja"),gpdfTr("Amarillo"),gpdfTr("Violeta"),gpdfTr("Blanco")};
         const QStringList values={"#000000","#2855b4","#cc2244","#128012","#e88810","#ffd232","#8844cc","#ffffff"};
         for(int i=0;i<names.size();++i) { QPixmap swatch(16,16); swatch.fill(QColor(values[i])); colors->addItem(QIcon(swatch),names[i],QColor(values[i])); }
         colors->setCurrentIndex(pencil ? 1 : 5); form->addRow(pencil ? gpdfTr("Color:") : gpdfTr("Color primario:"),colors);
         QComboBox* secondary=nullptr;
-        if(!pencil) { secondary=new QComboBox; secondary->setObjectName("secondaryHighlightColor"); for(int i=0;i<colors->count();++i) secondary->addItem(colors->itemIcon(i),colors->itemText(i),colors->itemData(i)); secondary->setCurrentIndex(4); form->addRow(gpdfTr("Color secundario:"),secondary); }
+        if(!pencil) { secondary=new ViewModeCombo; secondary->setObjectName("secondaryHighlightColor"); for(int i=0;i<colors->count();++i) secondary->addItem(colors->itemIcon(i),colors->itemText(i),colors->itemData(i)); secondary->setCurrentIndex(4); form->addRow(gpdfTr("Color secundario:"),secondary); }
         auto opacity=new QSpinBox; opacity->setObjectName(pencil ? "penOpacity" : "highlightOpacity"); opacity->setRange(5,100); opacity->setSuffix("%"); opacity->setValue(pencil ? 100 : 60); form->addRow(gpdfTr("Opacidad:"),opacity);
         auto width=new QDoubleSpinBox; width->setObjectName("penWidth"); width->setRange(0.5,12); width->setSingleStep(0.5); width->setSuffix(" pt"); width->setValue(2); if(pencil) form->addRow(gpdfTr("Grosor:"),width); else width->deleteLater();
         auto widgetAction=new QWidgetAction(menu); widgetAction->setDefaultWidget(panel); menu->addAction(widgetAction);
@@ -1055,11 +1078,32 @@ private:
             "QTabBar::tab { color: #e5e7eb; background-color: #303846; padding: 5px 8px; }"
             "QTabBar::tab:selected { background-color: #356fbb; }"
             "QLineEdit, QComboBox, QAbstractSpinBox, QAbstractItemView { color: #e5e7eb; background-color: #191f28; selection-color: white; selection-background-color: #356fbb; }"
+            "QMenuBar { color: #e5e7eb; background-color: #252b35; }"
+            "QMenuBar::item:selected, QMenuBar::item:pressed { background-color: #356fbb; }"
             "QPushButton, QToolButton, QMenu { color: #e5e7eb; background-color: #303846; }"
             "QMenu::item:selected { background-color: #356fbb; }"
+            "QScrollBar:vertical { background: #20252d; width: 14px; margin: 0; }"
+            "QScrollBar:horizontal { background: #20252d; height: 14px; margin: 0; }"
+            "QScrollBar::handle { background: #657184; border: 3px solid #20252d; border-radius: 6px; }"
+            "QScrollBar::handle:vertical { min-height: 24px; }"
+            "QScrollBar::handle:horizontal { min-width: 24px; }"
+            "QScrollBar::handle:hover { background: #8895a8; }"
+            "QScrollBar::handle:pressed { background: #aeb8c7; }"
+            "QScrollBar::handle:disabled { background: #303846; }"
+            "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }"
+            "QScrollBar::add-page, QScrollBar::sub-page { background: #20252d; }"
+            "QAbstractScrollArea::corner { background: #20252d; border: none; }"
             "QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled, QPushButton:disabled, QToolButton:disabled, QComboBox:disabled, QAbstractSpinBox:disabled, QMenu::item:disabled { color: #aeb8c7; }"
             : QString());
         QApplication::setPalette(palette); setPalette(palette); scroll->setStyleSheet(enabled ? "QScrollArea { background: #20252d; border: 0; }" : "QScrollArea { background: #e9edf2; border: 0; }"); view->setDarkMode(enabled); updateToolbarLayout();
+        if(helpMenu) installFileMenu();
+#ifdef Q_OS_WIN
+        if(QApplication::platformName()=="windows") {
+            applyNativeWindowTheme(reinterpret_cast<HWND>(winId()),enabled);
+            // Installing the menu can recreate the native frame; apply again afterwards.
+            QTimer::singleShot(0,this,[this]{ applyNativeWindowTheme(reinterpret_cast<HWND>(winId()),view->darkMode); });
+        }
+#endif
         QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.setValue("reading/darkMode",enabled);
     }
     void createReadingActions() {
@@ -1096,7 +1140,7 @@ private:
     }
     QMenu* underlineMenu(QWidget* parent) {
         auto menu=new DownwardToolMenu(parent); auto panel=new QWidget; auto form=new QFormLayout(panel);
-        auto colors=new QComboBox; colors->setObjectName("underlineColor");
+        auto colors=new ViewModeCombo; colors->setObjectName("underlineColor");
         const QStringList names={gpdfTr("Negro"),gpdfTr("Azul"),gpdfTr("Rojo"),gpdfTr("Verde"),gpdfTr("Naranja"),gpdfTr("Amarillo"),gpdfTr("Violeta"),gpdfTr("Blanco")};
         const QStringList values={"#000000","#2855b4","#cc2244","#128012","#e88810","#ffd232","#8844cc","#ffffff"};
         for(int i=0;i<names.size();++i) { QPixmap swatch(16,16); swatch.fill(QColor(values[i])); colors->addItem(QIcon(swatch),names[i],QColor(values[i])); }
@@ -1252,7 +1296,6 @@ private:
         QVector<QKeySequenceEdit*> editors;
         for(int i=0;i<shortcutActions.size();++i) { auto item=new QTableWidgetItem(shortcutActions[i]->text().remove('&')); item->setFlags(item->flags() & ~Qt::ItemIsEditable); table->setItem(i,0,item); auto editor=new QKeySequenceEdit(shortcutActions[i]->shortcut()); editor->setClearButtonEnabled(true); editor->setMinimumWidth(230); editors.append(editor); table->setCellWidget(i,1,editor); }
         layout->addWidget(table);
-        auto note=new QLabel(gpdfTr("Confirmar/cancelar texto funciona durante la edición. Buscar/resultado siguiente funciona en el campo y la lista de resultados de Búsqueda. Los cambios se guardan para las próximas aperturas.")); note->setWordWrap(true); layout->addWidget(note);
         auto buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel|QDialogButtonBox::RestoreDefaults); layout->addWidget(buttons);
         connect(buttons->button(QDialogButtonBox::RestoreDefaults),&QPushButton::clicked,&dialog,[&]{ for(int i=0;i<editors.size();++i) editors[i]->setKeySequence(QKeySequence(shortcutActions[i]->property("defaultShortcut").toString())); });
         connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
@@ -1279,7 +1322,8 @@ private:
             menuBar()->hide(); return;
         }
 #ifdef Q_OS_WIN
-        if(QApplication::platformName()=="windows") {
+        if(QApplication::platformName()=="windows" && !view->darkMode) {
+            menuBar()->hide();
             HMENU root=CreateMenu(); bool ok=root!=nullptr;
             for(int i=0;i<fileActions.size();++i) fileActions[i]->setProperty("nativeCommand",fileCommandBase+UINT(i));
             for(int i=0;i<editActions.size();++i) editActions[i]->setProperty("nativeCommand",editCommandBase+UINT(i));
@@ -1321,11 +1365,15 @@ private:
             if(root) DestroyMenu(root);
             if(nativeMenu) return;
         }
+        if(QApplication::platformName()=="windows" && nativeMenu) {
+            auto hwnd=reinterpret_cast<HWND>(winId());
+            SetMenu(hwnd,nullptr); DestroyMenu(nativeMenu); nativeMenu=nullptr; DrawMenuBar(hwnd);
+        }
 #endif
         menuBar()->show();
         if(!menuBar()->actions().contains(fileMenu->menuAction())) {
             menuBar()->addMenu(fileMenu); menuBar()->addMenu(viewMenu);
-            auto edit=menuBar()->addMenu(gpdfTr("&Editar")); for(auto action:editActions) edit->addAction(action);
+            auto edit=new QMenu(gpdfTr("&Editar"),this); for(auto action:editActions) edit->addAction(action); menuBar()->addMenu(edit);
             menuBar()->addMenu(goMenu); menuBar()->addMenu(shortcutsMenu); menuBar()->addMenu(helpMenu);
         }
     }
@@ -1596,8 +1644,8 @@ private:
         if(!view->finishText()) { QSignalBlocker blocker(zoomPercent); zoomPercent->setValue(int(std::lround(view->scale*100))); return; }
         QPoint focus=anchor.x()<0 ? scroll->viewport()->rect().center() : anchor;
         QPointF content=focus+QPoint(scroll->horizontalScrollBar()->value(),scroll->verticalScrollBar()->value());
-        int anchorPage=pdf.pageIndex();
-        for(int i=0;i<view->pageRects.size();++i) if(view->pageRects[i].contains(content)) { anchorPage=i; break; }
+        int anchorPage=view->pageAt(content);
+        if(anchorPage<0) anchorPage=pdf.pageIndex();
         QRectF previousRect=view->pageRects.value(anchorPage);
         QPointF relative=previousRect.isEmpty() ? QPointF(0,0) : QPointF((content.x()-previousRect.left())/previousRect.width(),(content.y()-previousRect.top())/previousRect.height());
         updatingView=true;
@@ -1619,13 +1667,7 @@ private:
             return;
         }
         double position=scroll->verticalScrollBar()->value()+scroll->viewport()->height()*0.35;
-        int closest=-1; double distance=std::numeric_limits<double>::max();
-        for(int i=0;i<view->pageRects.size();++i) {
-            auto r=view->pageRects[i];
-            double d=position<r.top() ? r.top()-position : (position>r.bottom() ? position-r.bottom() : 0);
-            if(d<distance) { closest=i; distance=d; }
-        }
-        view->activate(closest);
+        view->activate(view->closestPage(position));
     }
     void page(int delta) {
         if(!view->finishText()) return;
@@ -1748,6 +1790,9 @@ private:
         }
         return panelEntries;
     }
+    QVector<PdfDocument::AnnotationEntry> displayedAnnotationEntries;
+    QString displayedAnnotationQuery;
+    int displayedAnnotationFilter=-1,displayedAnnotationPage=-2;
     void refreshPanel(int selected=-1) {
         std::lock_guard guard(PdfDocument::apiMutex());
         updateNavigation(); refreshPersonalBookmarks();
@@ -1762,14 +1807,19 @@ private:
         { QSignalBlocker pageBlocker(pageNumber); pageNumber->setEnabled(pdf.loaded()); pageNumber->setRange(1,std::max(1,pdf.pageCount())); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); }
         pageLabel->setText(QString("/ %1  ").arg(pdf.pageCount()));
         QSignalBlocker blocker(annotations);
-        annotations->clear();
         auto entries=annotationsForPanel();
         auto normalized=[](QString value){ QString result; for(auto c:value.toCaseFolded().normalized(QString::NormalizationForm_D)) if(c.category()!=QChar::Mark_NonSpacing) result+=c; return result; };
         QString query=normalized(annotationSearch->text().trimmed());
+        const int filter=annotationTypeFilter->currentIndex();
+        const int scopePage=annotationScope->currentIndex()==1 ? pdf.pageIndex() : -1;
+        // Navigation does not change the document-wide list. Retain its items and layout.
+        if(entries!=displayedAnnotationEntries || query!=displayedAnnotationQuery || filter!=displayedAnnotationFilter || scopePage!=displayedAnnotationPage) {
+        displayedAnnotationEntries=entries; displayedAnnotationQuery=query;
+        displayedAnnotationFilter=filter; displayedAnnotationPage=scopePage;
+        annotations->clear();
         for(const auto& entry:entries) {
             if(!query.isEmpty() && !normalized(entry.text).contains(query)) continue;
             if(annotationScope->currentIndex()==1 && entry.page!=pdf.pageIndex()) continue;
-            const int filter=annotationTypeFilter->currentIndex();
             if(filter==0 && entry.type!=FPDF_ANNOT_TEXT && entry.type!=FPDF_ANNOT_FREETEXT) continue;
             const int types[]={0,0,FPDF_ANNOT_TEXT,FPDF_ANNOT_FREETEXT,FPDF_ANNOT_INK,FPDF_ANNOT_HIGHLIGHT,FPDF_ANNOT_UNDERLINE};
             if(filter>=2 && entry.type!=types[filter]) continue;
@@ -1787,6 +1837,7 @@ private:
             item->setData(Qt::UserRole,entry.page); item->setData(Qt::UserRole+1,entry.index);
             QString body=entry.text.isEmpty() ? QString::number(entry.index+1) : entry.text;
             item->setData(Qt::UserRole+2,QString("<b>%1</b> · %2").arg(label.toHtmlEscaped(),body.toHtmlEscaped().replace('\n',"<br/>")));
+        }
         }
         annotations->setCurrentRow(annotationRow(pdf.pageIndex(),selected));
         selectAnnotation(annotations->currentRow());

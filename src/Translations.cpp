@@ -7,6 +7,12 @@ public:
     bool isEmpty() const override { return false; }
     QString translate(const char* context,const char* source,const char*,int) const override {
         if(qstrcmp(context,"QKeySequenceEdit")==0 && qstrcmp(source,"Press shortcut")==0) return "Presionar un atajo";
+        if(qstrcmp(context,"QShortcut")==0) {
+            if(qstrcmp(source,"Ctrl")==0) return "Ctrl";
+            if(qstrcmp(source,"Shift")==0) return "Mayús";
+            if(qstrcmp(source,"Left")==0) return QString::fromUtf8("←");
+            if(qstrcmp(source,"Right")==0) return QString::fromUtf8("→");
+        }
         return {};
     }
 };

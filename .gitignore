@@ -4,6 +4,8 @@
 /build*/
 /dist/
 /aqtinstall.log
-/tests
+/tests/
+!/tests/efficiency_smoke.cpp
 *.pfx
 *.p12
+/tmp/
