@@ -16,6 +16,9 @@ al finalizar. El texto reconocido se conserva al cambiar de pestaña y al deshac
 o rehacer anotaciones, incluso en documentos con más de 64 páginas reconocidas.
 
 Requisitos OCR: Windows PowerShell 5.1 y un idioma OCR instalado en Windows.
+La reconstrucción local de 0.3.0 también corrige el arranque del instalador de
+actualizaciones en Windows, comprueba novedades en cada inicio y posterga el aviso
+si hay un diálogo abierto. Mantiene las verificaciones de tamaño y SHA-256.
 Las posiciones de caracteres dentro de las palabras son aproximadas. Al guardar
 no se incrusta una capa OCR en el PDF. Las políticas del equipo pueden bloquear
 el motor; en ese caso GPDF indica que la preparación OCR está incompleta.
@@ -34,6 +37,9 @@ Recognized text survives tab switches and annotation undo/redo, including
 documents containing more than 64 recognized pages.
 
 OCR requires Windows PowerShell 5.1 and an installed Windows OCR language.
+The local 0.3.0 rebuild also fixes Windows update installer launch, checks for
+updates at every startup, and defers notifications while another dialog is open.
+Download size and SHA-256 verification remain enforced.
 Character positions within words are approximate. Saving does not embed a
 searchable OCR layer in the PDF. Device policies may block recognition; GPDF
 then reports incomplete OCR preparation.
@@ -55,8 +61,13 @@ are built from an uncommitted working tree; their manifest records this fact.
 
 No commit, tag, push, or GitHub release is part of this preparation.
 
+The local artifacts were rebuilt with the updater fix while retaining version
+0.3.0 at the user's request. Their hashes differ from the original release.
+Already installed 0.3.0 copies need manual reinstallation; the updater only
+announces a higher version. Rebuilding locally does not replace GitHub assets.
+
 ## Validation and sizes
 
 See [validation-0.3.0.md](validation-0.3.0.md) for test results, build provenance
-and artifact hashes. Installer: 16.48 MB; portable archive: 20.67 MB;
-uncompressed distribution: 46.54 MB (decimal units).
+and artifact hashes. Rebuilt installer: 16.47 MB; portable archive: 20.67 MB;
+uncompressed distribution: 46.53 MB (decimal units).

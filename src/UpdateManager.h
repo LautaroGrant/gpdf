@@ -23,6 +23,8 @@ private:
     QWidget* window;
     QNetworkAccessManager* network;
     bool busy=false;
+    bool automaticStarted=false;
+    void offerAutomatically(const UpdateRelease& release);
     void offer(const UpdateRelease& release);
     void download(const UpdateRelease& release);
 };

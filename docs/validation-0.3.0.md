@@ -2,6 +2,34 @@
 
 Fecha: 22 de octubre de 2026.
 
+## Reconstrucción con corrección del actualizador — versión 0.3.0 conservada
+
+Por decisión del usuario se regeneraron los artefactos manteniendo 0.3.0.
+Esta sección corresponde a los archivos actuales; las secciones posteriores
+documentan la preparación inicial anterior a la corrección.
+
+- Compilación Release y despliegue estándar de Qt: correctos.
+- CTest: **13/13 aprobadas**, 37,03 s.
+- Instalación, reinstalación, hashes, apertura PDF y desinstalación aisladas: aprobadas con el paquete regenerado; registro y asociación PDF predeterminada conservados.
+- ZIP: sus 81 archivos coinciden por SHA-256 con el directorio portable.
+- El instalador y el portable anteriores, sus hashes y el manifiesto están conservados en `dist/archive/GPDF-0.3.0-before-update-fix/`.
+- Base Git de esta reconstrucción: `8c2d785da6f4331cdd0af3ce9e5eda0978b1819c`, con cambios locales sin commit. No se hizo push ni reemplazo en GitHub.
+- Los clientes que ya indiquen 0.3.0 necesitan reinstalar manualmente esta compilación; no se anuncia como una versión superior.
+
+| Artefacto actual | Bytes |
+| --- | ---: |
+| `dist/installers/GPDF-0.3.0-Setup.exe` | 16.474.598 |
+| `dist/GPDF-0.3.0-Portable.zip` | 20.668.331 |
+| Distribución sin comprimir | 46.533.658 |
+
+```text
+3c208ccc7309bd9b75f33ab9e539066c5b4ce838d461f6f7c10b76331266af28  GPDF-0.3.0-Setup.exe
+f7bf551e78aa6ec83d6f60a3d74737167a25f44a6590bef9b7d5454449cd1220  GPDF-0.3.0-Portable.zip
+```
+
+Evidencia adicional: `build-release-030/validation-installer-update-fix.log`.
+Los hashes actuales para distribución están en `dist/SHA256SUMS-0.3.0.txt`.
+
 ## Compilación y procedencia
 
 - Compilación Release nueva en `build-release-030`, con C++20, MinGW 13.1, Qt 6.8.3 y PDFium chromium/8086.
