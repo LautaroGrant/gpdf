@@ -77,6 +77,8 @@ PdfDocument::PdfDocument() { std::lock_guard apiGuard(pdfiumMutex);
 }
 PdfDocument::~PdfDocument() { std::lock_guard apiGuard(pdfiumMutex); close(); if(--libraryUsers==0) FPDF_DestroyLibrary(); }
 void PdfDocument::swap(PdfDocument& other) { std::lock_guard apiGuard(pdfiumMutex);
+    std::swap(ocrPages_,other.ocrPages_);
+    std::swap(contentRevision_,other.contentRevision_);
     std::swap(searchIndex_,other.searchIndex_);
     std::swap(revision_,other.revision_);
     std::swap(history_,other.history_);
@@ -165,7 +167,10 @@ bool PdfDocument::restoreHistory(int position) { std::lock_guard apiGuard(pdfium
     QByteArray next=history_[position].materialize();
     auto doc=FPDF_LoadMemDocument64(next.constData(),size_t(next.size()),password_.constData());
     if(!doc) return fail(gpdfTr("No se pudo restaurar el cambio."));
+    // Annotation undo/redo does not change the underlying page images or text.
+    auto recognized=std::move(ocrPages_); const auto contentRevision=contentRevision_;
     int page=index_; close(); bytes_=std::move(next); doc_=doc; hiddenTextPreview=-1;
+    ocrPages_=std::move(recognized); contentRevision_=contentRevision;
     revision_=++nextRevision;
     historyPosition_=position; dirty_=history_[position].id!=savedHistoryId_;
     return setPage(std::min(page,pageCount()-1));
@@ -178,13 +183,32 @@ QVector<PdfDocument::AnnotationEntry> PdfDocument::documentAnnotations() const {
     for(int index=0;index<pageCount();++index) entries+=pageAnnotations(index);
     annotationEntries_=entries; annotationsCached_=true; return entries;
 }
+bool PdfDocument::hasOcr(int page) const { std::lock_guard guard(pdfiumMutex); return ocrPages_.contains(page); }
+quint64 PdfDocument::contentRevision() const { std::lock_guard guard(pdfiumMutex); return contentRevision_; }
+bool PdfDocument::applyOcr(int page,const QVector<OcrWord>& words) {
+    std::lock_guard guard(pdfiumMutex);
+    if(!doc_ || page<0 || page>=pageCount()) return false;
+    OcrPage data; int line=-1;
+    for(const auto& word:words) {
+        if(word.text.isEmpty() || word.rect.isEmpty()) continue;
+        if(data.text.size()+word.text.size()>100000) return false;
+        if(!data.text.isEmpty()) { data.text+=word.line==line ? ' ' : '\n'; data.boxes.append(QRectF()); }
+        data.text+=word.text;
+        for(qsizetype i=0;i<word.text.size();++i) data.boxes.append(word.rect);
+        line=word.line;
+    }
+    // Retain every recognized page: evicting one would make document search incomplete.
+    ocrPages_.insert(page,std::move(data)); searchIndex_->remove(page); hoverRegions_->remove(page);
+    return true;
+}
 QString PdfDocument::pageText(int index) const { std::lock_guard apiGuard(pdfiumMutex);
+    if(auto it=ocrPages_.constFind(index);it!=ocrPages_.cend()) return it->text;
     auto page=doc_ ? FPDF_LoadPage(doc_,index) : nullptr; if(!page) return {};
     auto text=FPDFText_LoadPage(page); QString result;
     if(text) { int count=FPDFText_CountChars(text); QVector<unsigned short> buffer(count+1); FPDFText_GetText(text,0,count,buffer.data()); result=QString::fromUtf16(reinterpret_cast<const char16_t*>(buffer.constData())); FPDFText_ClosePage(text); }
     FPDF_ClosePage(page); return result;
 }
-int PdfDocument::characterCount() const { std::lock_guard apiGuard(pdfiumMutex); return text_ ? FPDFText_CountChars(text_) : 0; }
+int PdfDocument::characterCount() const { std::lock_guard apiGuard(pdfiumMutex); return ocrPages_.contains(index_) ? int(ocrPages_[index_].text.size()) : (text_ ? FPDFText_CountChars(text_) : 0); }
 int PdfDocument::moveCommentAnnotation(int sourcePage,int index,int destinationPage,QPointF topLeft) {
     std::lock_guard apiGuard(pdfiumMutex);
     const int originalPage=index_;
@@ -278,6 +302,8 @@ void PdfDocument::closePage() { std::lock_guard apiGuard(pdfiumMutex);
     text_ = nullptr; page_ = nullptr;
 }
 void PdfDocument::close() { std::lock_guard apiGuard(pdfiumMutex);
+    contentRevision_=++nextRevision;
+    ocrPages_.clear();
     annotationsCached_=false; annotationEntries_.clear(); annotationPages_.clear(); searchIndex_->clear();
     if(hoverText_) FPDFText_ClosePage(hoverText_);
     if(hoverPage_) FPDF_ClosePage(hoverPage_);
@@ -395,11 +421,26 @@ QImage PdfDocument::renderPage(int index,double scale,QSize pixelSize) const { s
     }
     return image;
 }
-int PdfDocument::characterAt(QPointF p) const { std::lock_guard apiGuard(pdfiumMutex); return text_ ? FPDFText_GetCharIndexAtPos(text_, p.x(), p.y(), 12, 12) : -1; }
+int PdfDocument::characterAt(QPointF p) const { std::lock_guard apiGuard(pdfiumMutex); if(auto it=ocrPages_.constFind(index_);it!=ocrPages_.cend()) {
+        for(int i=0;i<it->boxes.size();++i) if(!it->boxes[i].isEmpty() && it->boxes[i].adjusted(-2,-2,2,2).contains(p)) {
+            int end=i; while(end+1<it->boxes.size() && it->boxes[end+1]==it->boxes[i]) ++end;
+            // Windows supplies word boxes; approximate character positions within them.
+            const double fraction=(p.x()-it->boxes[i].left())/it->boxes[i].width();
+            return i+std::clamp(int(fraction*(end-i+1)),0,end-i);
+        }
+        return -1;
+    }
+    return text_ ? FPDFText_GetCharIndexAtPos(text_, p.x(), p.y(), 12, 12) : -1; }
 QPair<int,int> PdfDocument::lineRange(int index) const {
     std::lock_guard guard(pdfiumMutex);
     const int count=characterCount();
     if(index<0 || index>=count) return {-1,-1};
+    if(auto it=ocrPages_.constFind(index_);it!=ocrPages_.cend()) {
+        int first=index,last=index;
+        while(first>0 && it->text[first-1]!='\n') --first;
+        while(last+1<it->text.size() && it->text[last+1]!='\n') ++last;
+        return {first,last};
+    }
     double x=0,y=0;
     if(!FPDFText_GetCharOrigin(text_,index,&x,&y)) return {index,index};
     const double angle=FPDFText_GetCharAngle(text_,index),dx=std::cos(angle),dy=std::sin(angle);
@@ -433,6 +474,17 @@ QPair<int,int> PdfDocument::wordRange(int index) const {
     std::lock_guard guard(pdfiumMutex);
     auto line=lineRange(index);
     if(line.first<0) return line;
+    if(auto it=ocrPages_.constFind(index_);it!=ocrPages_.cend()) {
+        int first=index,last=index;
+        if(it->text[index].isSpace()) {
+            while(first>line.first && it->text[first-1].isSpace()) --first;
+            while(last<line.second && it->text[last+1].isSpace()) ++last;
+        } else if(it->text[index].isLetterOrNumber()) {
+            while(first>line.first && it->text[first-1].isLetterOrNumber()) --first;
+            while(last<line.second && it->text[last+1].isLetterOrNumber()) ++last;
+        }
+        return {first,last};
+    }
     auto letter=[&](int i) {
         const auto c=FPDFText_GetUnicode(text_,i);
         const auto category=QChar::category(c);
@@ -477,7 +529,9 @@ QVector<PdfDocument::SearchMatch> PdfDocument::searchPage(int index,const QStrin
     auto text=FPDFText_LoadPage(page);
     std::unique_ptr<std::remove_pointer_t<FPDF_TEXTPAGE>,decltype(&FPDFText_ClosePage)> textGuard(text,&FPDFText_ClosePage);
     if(text) {
-        int total=FPDFText_CountChars(text);
+        const auto ocr=ocrPages_.constFind(index);
+        const bool recognized=ocr!=ocrPages_.cend();
+        int total=recognized ? int(ocr->text.size()) : FPDFText_CountChars(text);
         auto cached=searchIndex_->object(index);
         SearchIndex fresh;
         if(!cached) {
@@ -492,7 +546,7 @@ QVector<PdfDocument::SearchMatch> PdfDocument::searchPage(int index,const QStrin
             // Map normalized UTF-16 positions back to PDFium's character indices.
             // Removing accents must not shift the geometry of the highlighted match.
             for(int i=0;i<total;++i) {
-                char32_t codepoint=FPDFText_GetUnicode(text,i);
+                char32_t codepoint=recognized ? ocr->text[i].unicode() : FPDFText_GetUnicode(text,i);
                 if(!codepoint) continue;
                 // ASCII needs neither Unicode normalization nor a temporary QString.
                 if(codepoint<128) { append(QChar(ushort(codepoint)).toLower(),i); continue; }
@@ -531,13 +585,15 @@ QVector<PdfDocument::SearchMatch> PdfDocument::searchPage(int index,const QStrin
             SearchMatch match{index,first,count,{}, {}, {}};
             int start=std::max(0,first-40),length=std::min(total-start,count+80);
             auto excerpt=[&](int from,int amount) {
+                if(recognized) return ocr->text.mid(from,amount);
                 QVector<unsigned short> buffer(amount+1);
                 int actual=FPDFText_GetText(text,from,amount,buffer.data());
                 return actual>0 ? QString::fromUtf16(reinterpret_cast<const char16_t*>(buffer.constData()),actual-1) : QString();
             };
             match.context=excerpt(start,length).simplified();
             match.contextHtml=(excerpt(start,first-start).toHtmlEscaped()+"<b>"+excerpt(first,count).toHtmlEscaped()+"</b>"+excerpt(first+count,std::max(0,start+length-first-count)).toHtmlEscaped()).replace('\n',' ').replace('\r',' ');
-            int rectangles=FPDFText_CountRects(text,first,count);
+            if(recognized) for(int c=first;c<first+count;++c) if(!ocr->boxes[c].isEmpty() && !match.rectangles.contains(ocr->boxes[c])) match.rectangles.append(ocr->boxes[c]);
+            int rectangles=recognized ? 0 : FPDFText_CountRects(text,first,count);
             for(int i=0;i<rectangles;++i) {
                 double left,top,right,bottom;
                 if(FPDFText_GetRect(text,i,&left,&top,&right,&bottom)) match.rectangles.append(QRectF(left,bottom,right-left,top-bottom));
@@ -555,6 +611,10 @@ QVector<PdfDocument::SearchMatch> PdfDocument::searchPage(int index,const QStrin
 }
 bool PdfDocument::textAt(int index,QPointF point,double margin) const { std::lock_guard apiGuard(pdfiumMutex);
     if(!doc_ || index<0 || index>=pageCount()) return false;
+    if(auto it=ocrPages_.constFind(index);it!=ocrPages_.cend()) {
+        for(const auto& box:it->boxes) if(!box.isEmpty() && box.adjusted(-margin,-margin,margin,margin).contains(point)) return true;
+        return false;
+    }
     QVector<QRectF> freshRegions;
     auto cachedRegions=hoverRegions_->object(index);
     if(!cachedRegions) {
@@ -583,6 +643,12 @@ bool PdfDocument::textAt(int index,QPointF point,double margin) const { std::loc
 }
 QVector<QRectF> PdfDocument::selectionRects(int first, int last) const { std::lock_guard apiGuard(pdfiumMutex);
     QVector<QRectF> result;
+    if(auto it=ocrPages_.constFind(index_);it!=ocrPages_.cend()) {
+        if(first<0 || last<0) return result;
+        if(first>last) std::swap(first,last);
+        for(int i=first;i<=last && i<it->boxes.size();++i) if(!it->boxes[i].isEmpty() && !result.contains(it->boxes[i])) result.append(it->boxes[i]);
+        return result;
+    }
     if (!text_ || first < 0 || last < 0) return result;
     if (first > last) std::swap(first, last);
     int count = FPDFText_CountRects(text_, first, last - first + 1);
@@ -593,6 +659,11 @@ QVector<QRectF> PdfDocument::selectionRects(int first, int last) const { std::lo
     return result;
 }
 QString PdfDocument::selectionText(int first, int last) const { std::lock_guard apiGuard(pdfiumMutex);
+    if(auto it=ocrPages_.constFind(index_);it!=ocrPages_.cend()) {
+        if(first<0 || last<0) return {};
+        if(first>last) std::swap(first,last);
+        return it->text.mid(first,last-first+1);
+    }
     if (!text_ || first < 0 || last < 0) return {};
     if (first > last) std::swap(first, last);
     QVector<unsigned short> buffer(last-first+2);

@@ -1,28 +1,28 @@
 # Changelog
 
+## 0.3.0 — October 22, 2026
+
+- Implementation of automatic local Windows OCR for scanned PDF pages, using the OCR languages installed in Windows without bundling additional recognition models.
+
+### Notes
+
+- Windows PowerShell 5.1 and an installed Windows OCR language are required. Device policies can prevent OCR from running.
+- OCR character positions within a word are approximate. Saving a PDF does not embed a searchable OCR text layer; results are retained locally by GPDF.
+
 ## 0.2.8 — October 17, 2026
 
-### Added
-
-- Standalone eraser button. Removes highlights, underlines, and ink strokes with the existing undo support.
+- Implementation of standalone eraser button. Removes highlights, underlines, and ink strokes with the existing undo support.
 - Automatic checks for stable updates on GitHub Releases, manual checks from Help, an automatic-check preference, and the option to skip a version.
 - Installer downloads with SHA-256 verification, progress, and cancellation. Updates use the normal prompts for unsaved documents before closing GPDF and opening the installer. Portable copies open the download page.
-
-### Changed
-
 - PDF pages render at the monitor's physical resolution, and the render cache refreshes when display scaling changes.
 - Page images and edges align to physical pixels to avoid additional resampling, including at fractional display scales and with 90° rotations.
 - The bottom overview bar is hidden to provide more reading space.
 - Middle-click autoscroll also moves horizontally when the document is wider than the viewport.
 - The rotation button has an icon and rotates pages clockwise in 90° increments with Ctrl+R in both languages.
 - Normal shutdown no longer restores the previous documents on the next launch. Recovery of unsaved changes after unexpected interruptions remains available.
-- Add personal bookmark has moved to Edit, in a section next to Delete selected annotation.
-
-### Fixed
-
-- Reopening an existing PDF checks its contents and reloads it if it changed externally, with a prompt for unsaved annotations.
-- Single-key shortcuts respect typing in annotations, comments, search boxes, and other input fields.
-- Word and line selection now handles PDFs that apply scaling through text or page transformation matrices.
+- Fix: Reopening an existing PDF checks its contents and reloads it if it changed externally, with a prompt for unsaved annotations.
+- Fix: Single-key shortcuts respect typing in annotations, comments, search boxes, and other input fields.
+- Fix: Word and line selection now handles PDFs that apply scaling through text or page transformation matrices.
 
 
 ## 0.2.7 — October 13, 2026
@@ -78,4 +78,4 @@
 
 ## 0.1 — Initial baseline
 
-Reading, annotations, tabs, search, recovery, export, printing, bookmarks, dark mode, and shortcuts. Earlier audit and measurements: [audit](docs/audit-2026-10-12.md) and [highlight performance](docs/highlight-performance.md).
+Reading, annotations, tabs, search, recovery, export, printing, bookmarks, dark mode, and shortcuts.

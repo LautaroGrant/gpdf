@@ -21,6 +21,10 @@ public:
     QVector<AnnotationEntry> documentAnnotations() const;
     qint64 historyStorageBytes() const;
     qint64 searchCacheStorageBytes() const;
+    struct OcrWord { QString text; QRectF rect; int line=0; };
+    bool hasOcr(int page) const;
+    quint64 contentRevision() const;
+    bool applyOcr(int page,const QVector<OcrWord>& words);
     QString pageText(int page) const;
     QVector<QPair<QString,QString>> properties() const;
     int characterCount() const;
@@ -107,6 +111,8 @@ public:
     void setHiddenPreview(int index) { std::lock_guard guard(apiMutex()); hiddenTextPreview=index; }
     int hiddenTextPreview=-1;
 private:
+    struct OcrPage { QString text; QVector<QRectF> boxes; };
+    QHash<int,OcrPage> ocrPages_;
     struct SearchIndex {
         QString normalized,lastQuery; QVector<int> starts,ends; QVector<SearchMatch> matches;
         qsizetype storageBytes() const {
@@ -117,6 +123,7 @@ private:
     };
     mutable std::unique_ptr<QCache<int,SearchIndex>> searchIndex_=std::make_unique<QCache<int,SearchIndex>>(16*1024*1024);
     quint64 revision_=0;
+    quint64 contentRevision_=0;
     QByteArray snapshot() const;
     void resetHistory();
     void recordHistory();

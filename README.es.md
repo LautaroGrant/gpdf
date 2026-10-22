@@ -1,22 +1,20 @@
-# GPDF 0.2.8 (Beta)
+# GPDF 0.3.0 (Beta)
 
-GPDF es un lector y editor de anotaciones PDF minimalista, ligero y eficiente para Windows x64, desarrollado con C++20, Qt Widgets y PDFium.
+GPDF es un editor de PDF minimalista, ligero y eficiente para Windows x64, desarrollado con C++ mediante las librerias de Qt Widgets y PDFium.
 
 ## ¿Por qué GPDF?
 
-Leer y editar un PDF tendría que ser facil, pero muchas aplicaciones de PDF llenan sus interfaces con herramientas, funciones y avisos de suscripción que dificultan el trabajo cotidiano.
+La gran mayoría de programas dedicados a leer PDFs llenan sus UI con funciones irrelevantes, pop-ups de suscripción y sugerencias de IA que sencillamente entorpecen tu vida.
 
-GPDF mantiene el foco en el documento y en el usuario. Ofrece lo esencial para leer, resaltar, tomar notas y organizar el trabajo mediante una interfaz clara, con la rapidez y la practicidad como ejes de su diseño.
+La idea de GPDF es devolver el foco hacia el usuario. Ofrece lo esencial para leer, resaltar, tomar notas y organizar tu trabajo mediante una interfaz clara y sencilla; con la rapidez y la practicidad como ejes de su diseño.
 
-La aplicación completa fue concebida para ser ligera y ocupar menos de 50 MB en total.
+El proyecto fue concebido para ser pequeño y rapido, ocupando menos de 50 MB en total y consumiendo 4 veces menos RAM que los editores principales en el mercado.
 
-Diseñado originalmente para estudiantes y académicos, GPDF está dirigido a cualquier persona que busque una herramienta sencilla para trabajar con PDF. Es de uso gratuito y actualmente se encuentra en fase beta.
+Diseñado originalmente para estudiantes y académicos, GPDF está dirigido a cualquier persona que busque una herramienta sencilla para trabajar con PDF. Es de uso gratuito y actualmente se encuentra en beta.
 
 ## Instalar y ejecutar
 
-1. Ejecutar el instalador en Windows x64.
-2. Elegir inglés o español y seleccionar la carpeta de instalación y los accesos directos.
-3. Finalizar la instalación y abrir GPDF desde el menú Inicio.
+Simplemente ejecutar el instalador en Windows x64.
 
 Enlace a las versiones publicadas: https://github.com/LautaroGrant/gpdf/releases
 
@@ -29,3 +27,4 @@ Enlace a las versiones publicadas: https://github.com/LautaroGrant/gpdf/releases
 - Copias de recuperación y restauración de sesiones.
 - Exportación de anotaciones a Markdown, texto o HTML; impresión y vista previa de impresión.
 - Disponible en español e inglés.
+- Complemento de OCR para documentos no digitalizados.

@@ -4,6 +4,7 @@
 #include "SessionStore.h"
 #include "NativeScrollCursor.h"
 #include "UpdateManager.h"
+#include "OcrService.h"
 
 class Window : public QMainWindow {
 public:
@@ -229,9 +230,13 @@ public:
         qApp->installEventFilter(this);
         checkpointTimer=new QTimer(this); checkpointTimer->setObjectName("checkpointTimer"); checkpointTimer->setSingleShot(true); checkpointTimer->setInterval(1500); connect(checkpointTimer,&QTimer::timeout,this,[this]{ saveSession(); });
         auto periodic=new QTimer(this); periodic->setInterval(15000); connect(periodic,&QTimer::timeout,this,[this]{ if(!documents.empty()) saveSession(); }); periodic->start();
+        ocrService=new OcrService(this);
+        auto ocrTimer=new QTimer(this); ocrTimer->setObjectName("ocrTimer"); ocrTimer->setInterval(25);
+        connect(ocrTimer,&QTimer::timeout,this,[this]{ processDocumentOcr(); }); ocrTimer->start();
         statusBar()->hide(); view->refresh();
     }
     ~Window() override {
+        delete ocrService; ocrService=nullptr;
         stopAutoScroll();
         view->shutdownWorkers();
         qApp->removeEventFilter(this);
@@ -1391,7 +1396,90 @@ private:
     void stopAutoScroll() {
         if(autoScrollTimer && autoScrollTimer->isActive()) { autoScrollTimer->stop(); QApplication::restoreOverrideCursor(); }
     }
+    OcrService* ocrService=nullptr;
+    static QString ocrLabel(const char* es,const char* en) { return QString::fromUtf8(currentUiLanguage()=="en" ? en : es); }
+    PdfDocument& documentPdf(int index) { return index==activeDocument ? pdf : documents[index]->stored; }
+    bool documentOcrReady(int index) {
+        if(index<0 || index>=int(documents.size())) return true;
+        auto& state=*documents[index]; const auto content=documentPdf(index).contentRevision();
+        if(state.ocrContentRevision!=content) {
+            state.ocrContentRevision=content; state.ocrNextPage=0; state.ocrComplete=false; state.ocrError.clear();
+        }
+        return state.ocrComplete;
+    }
+    void showOcrProgress(int index) {
+        if(index!=activeDocument) return;
+        const auto& state=*documents[index];
+        auto text=ocrLabel("Preparando texto del documento: página %1 de %2…", "Preparing document text: page %1 of %2…")
+            .arg(std::clamp(state.ocrNextPage,1,pdf.pageCount())).arg(pdf.pageCount());
+        statusBar()->show(); statusBar()->showMessage(text);
+        if(!searchInput->text().trimmed().isEmpty()) searchStatus->setText(text);
+    }
+    void finishDocumentOcr(int index) {
+        auto& state=*documents[index]; state.ocrComplete=true;
+        if(index!=activeDocument) return;
+        statusBar()->clearMessage(); statusBar()->hide();
+        if(!searchInput->text().trimmed().isEmpty()) startSearch();
+    }
+    void processDocumentOcr() {
+        if(activeDocument<0 || documents[activeDocument]->ocrComplete) {
+            statusBar()->clearMessage(); statusBar()->hide();
+        }
+        if(!ocrService || ocrService->busy() || activeDocument<0) return;
+        std::unique_lock lock(PdfDocument::apiMutex(),std::try_to_lock);
+        if(!lock.owns_lock()) return;
+        // Prioritize the visible document, then finish the other open documents.
+        int target=activeDocument;
+        if(documentOcrReady(target)) {
+            target=-1;
+            for(int i=0;i<int(documents.size());++i) if(!documentOcrReady(i)) { target=i; break; }
+            if(target<0) return;
+        }
+        auto& state=*documents[target]; auto& document=documentPdf(target);
+        if(!document.loaded()) return;
+        // Yield regularly while checking native text, even on very large documents.
+        for(int budget=0;budget<8;++budget) {
+            if(state.ocrNextPage>=document.pageCount()) { finishDocumentOcr(target); return; }
+            const int page=state.ocrNextPage++;
+            if(document.hasOcr(page) || !document.pageText(page).trimmed().isEmpty()) continue;
+            const auto id=state.id; const auto content=state.ocrContentRevision;
+            const auto size=document.pageSize(page);
+            const double scale=size.isEmpty() ? 1.0 : std::min(3.0,2400.0/std::max(size.width(),size.height()));
+            const auto image=document.renderPage(page,scale);
+            showOcrProgress(target);
+            lock.unlock();
+            ocrService->recognize(image,size,[this,id,content,page,size](QVector<PdfDocument::OcrWord> words,QString error){
+                int index=-1;
+                for(int i=0;i<int(documents.size());++i) if(documents[i]->id==id) { index=i; break; }
+                if(index<0) return;
+                auto& state=*documents[index]; auto& document=documentPdf(index);
+                if(document.contentRevision()!=content || state.ocrContentRevision!=content) return;
+                if(!error.isEmpty()) { state.ocrError=error; finishDocumentOcr(index); return; }
+                for(auto& word:words) {
+                    const auto r=word.rect;
+                    const auto a=document.normalizedToPage(page,{r.left()/size.width(),1-r.bottom()/size.height()});
+                    const auto b=document.normalizedToPage(page,{r.right()/size.width(),1-r.top()/size.height()});
+                    word.rect=QRectF(a,b).normalized();
+                }
+                if(!document.applyOcr(page,words)) {
+                    state.ocrError=ocrLabel("La página supera el límite de texto.", "Page exceeds text limit.");
+                    finishDocumentOcr(index); return;
+                }
+                if(index==activeDocument) {
+                    if(pdf.pageIndex()==page) view->resetSelection();
+                    view->update();
+                }
+                // Search starts once the whole document is ready, never once per page.
+                if(state.ocrNextPage>=document.pageCount()) finishDocumentOcr(index);
+            });
+            return;
+        }
+    }
     struct DocumentState {
+        quint64 ocrContentRevision=0;
+        int ocrNextPage=0;
+        bool ocrComplete=false;
+        QString ocrError;
         QString id=QUuid::createUuid().toString(QUuid::WithoutBraces);
         quint64 backupRevision=0;
         bool discardOnExit=false;
@@ -1433,6 +1521,7 @@ private:
         if(!view->finishText()) { updateDocumentTabs(); return false; }
         stopAutoScroll();
         changingTabs=true; storeDocument(); activeDocument=index;
+        statusBar()->clearMessage(); statusBar()->hide();
         auto& doc=*documents[index]; pdf.swap(doc.stored); source=doc.path;
         resetSearch(); view->newDocument(); view->mode=doc.mode; view->fit=doc.fit; view->scale=doc.scale; view->rotation=doc.rotation;
         { QSignalBlocker a(viewMode),b(annotationScope),c(annotationTypeFilter); viewMode->setCurrentIndex(int(doc.mode)); annotationScope->setCurrentIndex(doc.scope); annotationTypeFilter->setCurrentIndex(doc.type); }
@@ -1488,6 +1577,7 @@ private:
         matches.clear(); searchResults->clear(); view->searchPage=-1; view->searchRects.clear(); view->update();
         if(!pdf.loaded()) { searchStatus->setText(gpdfTr("Abrir un PDF para buscar.")); return; }
         if(searchQuery.isEmpty()) { searchStatus->setText(gpdfTr("Ingresar texto para buscar.")); return; }
+        if(!documentOcrReady(activeDocument)) { showOcrProgress(activeDocument); return; }
         searchStatus->setText(gpdfTr("Buscando…")); searchTask->start();
     }
     void searchEnter() {
@@ -1520,6 +1610,7 @@ private:
     }
     void searchNextPage() {
         if(searchBusy) return;
+        if(!documentOcrReady(activeDocument)) { showOcrProgress(activeDocument); return; }
         searchBusy=true; int generation=searchGeneration,index=nextSearchPage; QString query=searchQuery; quint64 revision=pdf.revision(); QPointer<Window> target(this);
         view->workers.start([target,generation,index,query,revision]{
             QVector<PdfDocument::SearchMatch> found;
@@ -1538,6 +1629,8 @@ private:
         if(nextSearchPage>=pdf.pageCount()) {
             searchTask->stop();
             searchStatus->setText(matches.isEmpty() ? gpdfTr("Sin resultados.") : QString(gpdfTr("%1 resultados en %2 páginas.")).arg(matches.size()).arg(pdf.pageCount()));
+            if(activeDocument>=0 && !documents[activeDocument]->ocrError.isEmpty())
+                searchStatus->setText(searchStatus->text()+ocrLabel(" · OCR incompleto", " · OCR incomplete"));
         } else {
             searchStatus->setText(QString(gpdfTr("%1 resultados · buscando página %2 de %3…")).arg(matches.size()).arg(nextSearchPage+1).arg(pdf.pageCount()));
             searchTask->start();
@@ -1570,6 +1663,7 @@ private:
         return save();
     }
     void documentOpened(const QString& path) {
+        statusBar()->clearMessage(); statusBar()->hide();
         source=QFileInfo(path).absoluteFilePath();
         { QSignalBlocker scopeBlocker(annotationScope); annotationScope->setCurrentIndex(0); QSignalBlocker typeBlocker(annotationTypeFilter); annotationTypeFilter->setCurrentIndex(0); }
         togglePanel->setChecked(false); { QSignalBlocker blocker(annotationSearch); annotationSearch->clear(); } resetSearch(); view->newDocument(); refresh(); scroll->verticalScrollBar()->setValue(0);

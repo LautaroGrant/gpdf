@@ -1,22 +1,20 @@
-# GPDF 0.2.8 (Beta)
+# GPDF 0.3.0 (Beta)
 
-GPDF is a minimalist, lightweight and efficient PDF reader and annotation editor for Windows x64, built with C++20, Qt Widgets and PDFium.
+GPDF is a minimalist, lightweight and efficient PDF reader and annotation editor for Windows x64, built with C++, Qt Widgets and PDFium.
 
 ## Why GPDF?
 
-Reading and editing a PDF should be simple, yet many PDF applications clog their interfaces with advanced tools, subscription prompts and features that get in the way of everyday work.
+Reading and editing a PDF should be simple, yet many PDF applications will clog their interfaces with irrelevant tools, subscription prompts and AI suggestions that get in the way of meaningful work.
 
 GPDF keeps the focus on the document and the user. It provides the essentials for reading, highlighting, taking notes and organizing your work through a clean interface, with speed and practicality guiding its design.
 
-The complete application was conceived to be lightweight, taking up less than 50 MB in total.
+The complete application was conceived to be lightweight and fast, taking up less than 50 MB in total and 4x less RAM consumption than mainstream PDF Readers.
 
 Originally designed for students and academics, GPDF is for anyone who wants a straightforward tool for working with PDFs. It is free to use and currently in beta.
 
 ## Install and run
 
-1. Run the installer on Windows x64.
-2. Choose English or Spanish, then choose the installation folder and shortcuts.
-3. Finish the installation and open GPDF from the Start menu.
+Simply run and follow the installer on Windows x64 and enjoy it.
 
 Link of releases: https://github.com/LautaroGrant/gpdf/releases
 
@@ -28,4 +26,5 @@ Link of releases: https://github.com/LautaroGrant/gpdf/releases
 - Tabs, thumbnails, PDF outlines, personal bookmarks and reading progress. 
 - Recovery copies and session restoration.
 - Annotation export to Markdown, text or HTML; printing and print preview.
+- Automatic OCR for undigitalized documents.
 - Spanish and English supported.

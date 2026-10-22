@@ -4,8 +4,15 @@
 /build*/
 /dist/
 /aqtinstall.log
-/tests/
-!/tests/efficiency_smoke.cpp
+/tests/*
+!/tests/*.cpp
+!/tests/data/
+/tests/data/*
+!/tests/data/README.md
+!/tests/data/annotations-restricted.pdf
+!/tests/data/bookmarks.pdf
+!/tests/data/invalid-last-page.pdf
+!/tests/data/recovery-encrypted.pdf
 *.pfx
 *.p12
 /tmp/
