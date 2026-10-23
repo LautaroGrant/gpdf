@@ -114,6 +114,22 @@ public:
         toolbarLayout->addWidget(left,0,0); toolbarLayout->addWidget(bar,0,1,Qt::AlignCenter); toolbarLayout->setColumnStretch(1,1);
         auto right=new QWidget; right->setObjectName("toolbarRight"); auto rightLayout=new QHBoxLayout(right); rightLayout->setContentsMargins(0,0,0,0);
         toolbarLayout->addWidget(right,0,2); toolbar->addWidget(host);
+        addToolBarBreak();
+        ocrToolbar=addToolBar("OCR"); ocrToolbar->setObjectName("ocrToolbar");
+        ocrToolbar->setMovable(false); ocrToolbar->setFloatable(false);
+        ocrToolbar->setContextMenuPolicy(Qt::PreventContextMenu);
+        auto ocrHost=new QWidget; auto ocrLayout=new QHBoxLayout(ocrHost);
+        ocrHost->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+        ocrLayout->setContentsMargins(8,2,8,2); ocrLayout->setSpacing(8);
+        ocrMessage=new QLabel; ocrMessage->setObjectName("ocrMessage");
+        ocrMessage->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);
+        ocrLayout->addWidget(ocrMessage,1);
+        ocrApply=new QPushButton(ocrLabel("Aplicar OCR","Apply OCR")); ocrApply->setObjectName("ocrApply");
+        ocrCancel=new QPushButton(ocrLabel("Ahora no","Not now")); ocrCancel->setObjectName("ocrCancel");
+        ocrLayout->addWidget(ocrApply); ocrLayout->addWidget(ocrCancel);
+        ocrToolbar->addWidget(ocrHost); ocrToolbar->hide();
+        connect(ocrApply,&QPushButton::clicked,this,[this]{ beginDocumentOcr(); });
+        connect(ocrCancel,&QPushButton::clicked,this,[this]{ cancelDocumentOcr(); });
         auto action = [bar](QString title, auto handler){ auto a=bar->addAction(title); QObject::connect(a,&QAction::triggered,handler); return a; };
         auto separator=[](const QString& name){
             auto line=new QFrame; line->setObjectName(name);
@@ -174,7 +190,7 @@ public:
         auto group = new QActionGroup(this);
         const QStringList labels{gpdfTr("Seleccionar"),gpdfTr("Comentario"),gpdfTr("Texto"),gpdfTr("Lápiz")};
         for(int i=0;i<labels.size();++i) {
-            auto a=editingAction(labels[i],[this,i]{ if(!view->finishText()) return; view->tool=PageView::Tool(i); view->resetSelection(); view->update(); statusBar()->showMessage(i==0 ? gpdfTr("Arrastrar sobre el texto y luego presionar Resaltar.") : gpdfTr("Hacer clic en la página o arrastrar para dibujar.")); });
+            auto a=editingAction(labels[i],[this,i]{ if(!view->finishText()) return; view->tool=PageView::Tool(i); view->resetSelection(); view->update(); });
             a->setObjectName(QString("editTool%1").arg(i)); a->setIcon(QIcon(new GpdfToolIcon(i))); a->setShortcut(QKeySequence(Qt::Key_F1+i)); addAction(a);
             a->setCheckable(true); group->addAction(a); if(i==0) a->setChecked(true);
         }
@@ -233,7 +249,7 @@ public:
         ocrService=new OcrService(this);
         auto ocrTimer=new QTimer(this); ocrTimer->setObjectName("ocrTimer"); ocrTimer->setInterval(25);
         connect(ocrTimer,&QTimer::timeout,this,[this]{ processDocumentOcr(); }); ocrTimer->start();
-        statusBar()->hide(); view->refresh();
+        view->refresh();
     }
     ~Window() override {
         delete ocrService; ocrService=nullptr;
@@ -301,24 +317,25 @@ public:
         QFileInfo destination(path); QString suffix=destination.suffix().toLower();
         auto normalized=[](const QString& file) { QFileInfo info(file); QString canonical=info.canonicalFilePath(); return canonical.isEmpty() ? info.absoluteFilePath() : canonical; };
         for(int i=0;i<int(documents.size());++i) if(normalized(path).compare(normalized(i==activeDocument ? source : documents[i]->path),Qt::CaseInsensitive)==0) {
-            statusBar()->showMessage(gpdfTr("La exportación no puede reemplazar un documento abierto.")); return false;
+            importantWarning(gpdfTr("La exportación no puede reemplazar un documento abierto.")); return false;
         }
-        if(suffix!="md" && suffix!="txt" && suffix!="html") { statusBar()->showMessage(gpdfTr("Elegir una extensión .md, .txt o .html para exportar.")); return false; }
+        if(suffix!="md" && suffix!="txt" && suffix!="html") { importantWarning(gpdfTr("Elegir una extensión .md, .txt o .html para exportar.")); return false; }
         bool ok=AnnotationExport::write(path,QFileInfo(source).fileName(),pdf.documentAnnotations());
-        if(ok) statusBar()->showMessage(gpdfTr("Anotaciones exportadas: ")+path);
+        if(!ok) importantWarning(gpdfTr("No se pudieron exportar las anotaciones."));
         return ok;
     }
 
     bool saveSession(bool clean=false) {
         if(restoringSession || sessionClosed) return true;
         if(activeDocument>=0) captureDocument();
-        QDir root(sessionDirectory()); if(!root.exists() && !QDir().mkpath(root.absolutePath())) return false;
+        QDir root(sessionDirectory()); if(!root.exists() && !QDir().mkpath(root.absolutePath())) return sessionSaveFailure(gpdfTr("No se pudo crear la copia de recuperación."));
         QJsonArray list;
         for(int i=0;!clean && i<int(documents.size());++i) {
             auto& doc=*documents[i]; auto& engine=i==activeDocument ? pdf : doc.stored;
             QString backup=doc.id+".pdf"; bool dirty=engine.dirty() && !doc.discardOnExit;
             if(dirty && (doc.backupRevision!=engine.revision() || !root.exists(backup))) {
-                if(!engine.saveRecovery(root.filePath(backup))) { statusBar()->showMessage(gpdfTr("No se pudo crear la copia de recuperación.")); return false; } doc.backupRevision=engine.revision();
+                if(!engine.saveRecovery(root.filePath(backup))) return sessionSaveFailure(gpdfTr("No se pudo crear la copia de recuperación."));
+                doc.backupRevision=engine.revision();
             }
             QJsonObject item={{"path",doc.path},{"id",doc.id},{"backup",dirty ? backup : QString()},{"page",engine.pageIndex()},{"mode",int(doc.mode)},{"fit",int(doc.fit)},{"scale",doc.scale},{"rotation",doc.rotation},{"vertical",doc.vertical},{"horizontal",doc.horizontal},{"scope",doc.scope},{"type",doc.type},{"query",doc.query},{"searchVisible",doc.searchVisible},{"annotationsVisible",doc.annotationsVisible}};
             item["marks"]=doc.personalMarks;
@@ -327,7 +344,10 @@ public:
         }
         for(const auto& pending:pendingRecoveryItems) list.append(pending);
         QString activeId=!clean && activeDocument>=0 ? documents[activeDocument]->id : QString();
-        return SessionStore::write(root,QJsonObject{{"version",1},{"clean",clean},{"active",clean ? -1 : activeDocument},{"activeId",activeId},{"documents",list}});
+        if(!SessionStore::write(root,QJsonObject{{"version",1},{"clean",clean},{"active",clean ? -1 : activeDocument},{"activeId",activeId},{"documents",list}}))
+            return sessionSaveFailure(ocrLabel("No se pudo guardar la sesión de recuperación.","The recovery session could not be saved."));
+        sessionSaveWarningShown=false;
+        return true;
     }
 
     void restoreWindow() {
@@ -826,14 +846,15 @@ private:
         stopAutoScroll();
         captureDocument();
         int removed=activeDocument;
+        if(removed>=0 && ocrRunningDocument==documents[removed]->id) { ocrService->cancel(); ocrRunningDocument.clear(); }
         pdf.closeDocument();
         if(removed>=0) documents.erase(documents.begin()+removed);
         activeDocument=-1;
         if(!documents.empty()) { bool switched=switchDocument(std::min(removed,int(documents.size())-1)); if(switched) saveSession(); return switched; }
-        source.clear(); resetSearch(); searchAction->setChecked(false); togglePanel->setChecked(false);
+        source.clear(); resetSearch(); searchAction->setChecked(false); togglePanel->setChecked(false); updateOcrBar();
         view->newDocument(); view->setRotation(0); view->setFit(PageView::Manual); view->setZoom(1.25);
         viewMode->setCurrentIndex(0); view->setMode(PageView::Continuous); refresh();
-        saveSession(); statusBar()->showMessage(gpdfTr("Hacer clic en el área vacía para abrir un PDF.")); return true;
+        saveSession(); return true;
     }
     QTextEdit* focusedTextEditor() const {
         return qobject_cast<QTextEdit*>(QApplication::focusWidget());
@@ -911,6 +932,7 @@ private:
 #endif
     }
     void syncViewActions() {
+        updateOcrAction();
         if(viewActions.isEmpty()) return;
         const QStringList panels={"showThumbnailsAction","showBookmarksAction","showPersonalBookmarksAction"};
         for(int i=0;i<viewActions.size();++i) {
@@ -957,6 +979,8 @@ private:
             auto item=action(viewMenu,fitNames[i],QString("fitMode%1").arg(i+1),[this,i](bool checked){ fitView(checked ? PageView::Fit(i+1) : PageView::Manual); });
             item->setCheckable(true); item->setProperty("fitMode",i+1); fits->addAction(item);
         }
+        viewMenu->addSeparator();
+        action(viewMenu,ocrLabel("Aplicar OCR","Apply OCR"),"ocrDocumentAction",[this]{ beginDocumentOcr(); })->setEnabled(false);
         viewMenu->addSeparator(); auto modes=viewMenu->addMenu(gpdfTr("Modo de vista")); auto modesGroup=new QActionGroup(this);
         const QStringList names={gpdfTr("Vista continua"),gpdfTr("Página individual"),gpdfTr("Dos páginas")};
         for(int i=0;i<3;++i) {
@@ -1075,7 +1099,7 @@ private:
         // Windows controls may use system text colors instead of the inherited palette.
         // Scope explicit colors to interface controls; PDF text retains its own color.
         setStyleSheet(enabled ?
-            "QLabel, QCheckBox, QRadioButton, QGroupBox, QTabBar, QStatusBar { color: #e5e7eb; }"
+            "QLabel, QCheckBox, QRadioButton, QGroupBox, QTabBar { color: #e5e7eb; }"
             "QToolBar, QTabWidget::pane, QWidget#personalBookmarksPanel, QDialog { background-color: #252b35; color: #e5e7eb; }"
             "QTabWidget::pane { border: 1px solid #303846; }"
             "QKeySequenceEdit, QTextBrowser, QPlainTextEdit, QTextEdit { color: #e5e7eb; background-color: #191f28; }"
@@ -1135,7 +1159,7 @@ private:
         connect(secondaryAction,&QAction::triggered,this,[this]{ std::lock_guard guard(PdfDocument::apiMutex()); if(!pdf.loaded() || view->first<0 || view->last<0) return; if(!pdf.highlight(view->first,view->last,view->secondaryHighlightColor)) error(pdf.error()); else { view->resetSelection(); refresh(); } });
         tools->setMinimumWidth(tools->sizeHint().width()+16);
         updateToolbarLayout();
-        action(fileMenu,fileActions,gpdfTr("Exportar anotaciones…"),"exportAnnotationsAction",[this]{ if(!view->finishText() || !pdf.loaded()) return; QString selectedFilter; auto path=QFileDialog::getSaveFileName(this,gpdfTr("Exportar anotaciones"),QFileInfo(source).completeBaseName()+"-anotaciones.md",gpdfTr("Markdown (*.md);;Texto (*.txt);;HTML (*.html)"),&selectedFilter,fileDialogOptions()); if(!path.isEmpty() && QFileInfo(path).suffix().isEmpty()) path+=selectedFilter.startsWith("HTML") ? ".html" : selectedFilter.startsWith(gpdfTr("Texto")) ? ".txt" : ".md"; if(!path.isEmpty() && !exportAnnotationsTo(path)) error(gpdfTr("No se pudieron exportar las anotaciones.")); });
+        action(fileMenu,fileActions,gpdfTr("Exportar anotaciones…"),"exportAnnotationsAction",[this]{ if(!view->finishText() || !pdf.loaded()) return; QString selectedFilter; auto path=QFileDialog::getSaveFileName(this,gpdfTr("Exportar anotaciones"),QFileInfo(source).completeBaseName()+"-anotaciones.md",gpdfTr("Markdown (*.md);;Texto (*.txt);;HTML (*.html)"),&selectedFilter,fileDialogOptions()); if(!path.isEmpty() && QFileInfo(path).suffix().isEmpty()) path+=selectedFilter.startsWith("HTML") ? ".html" : selectedFilter.startsWith(gpdfTr("Texto")) ? ".txt" : ".md"; if(!path.isEmpty()) exportAnnotationsTo(path); });
         auto exportAction=findChild<QAction*>("exportAnnotationsAction"); fileMenu->removeAction(exportAction); fileMenu->insertAction(findChild<QAction*>("propertiesAction"),exportAction);
         QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); dark->setChecked(settings.value("reading/darkMode",false).toBool()); applyDarkMode(dark->isChecked());
     }
@@ -1397,6 +1421,11 @@ private:
         if(autoScrollTimer && autoScrollTimer->isActive()) { autoScrollTimer->stop(); QApplication::restoreOverrideCursor(); }
     }
     OcrService* ocrService=nullptr;
+    QToolBar* ocrToolbar=nullptr;
+    QLabel* ocrMessage=nullptr;
+    QPushButton* ocrApply=nullptr;
+    QPushButton* ocrCancel=nullptr;
+    QString ocrRunningDocument;
     static QString ocrLabel(const char* es,const char* en) { return QString::fromUtf8(currentUiLanguage()=="en" ? en : es); }
     PdfDocument& documentPdf(int index) { return index==activeDocument ? pdf : documents[index]->stored; }
     bool documentOcrReady(int index) {
@@ -1404,56 +1433,130 @@ private:
         auto& state=*documents[index]; const auto content=documentPdf(index).contentRevision();
         if(state.ocrContentRevision!=content) {
             state.ocrContentRevision=content; state.ocrNextPage=0; state.ocrComplete=false; state.ocrError.clear();
+            state.ocrSamplePage=0; state.ocrRequested=false; state.ocrPrompt=false;
+            state.ocrDismissed=false; state.ocrChecked.clear(); ++state.ocrGeneration;
+            state.ocrNeeded=false;
         }
-        return state.ocrComplete;
+        return state.ocrComplete || state.ocrPrompt || state.ocrDismissed;
+    }
+    void updateOcrAction() {
+        auto action=findChild<QAction*>("ocrDocumentAction"); if(!action) return;
+        const bool enabled=activeDocument>=0 && documents[activeDocument]->ocrNeeded && !documents[activeDocument]->ocrRequested;
+        action->setEnabled(enabled);
+#ifdef Q_OS_WIN
+        if(nativeMenu) EnableMenuItem(nativeMenu,viewCommandBase+UINT(viewActions.indexOf(action)),MF_BYCOMMAND|(enabled ? MF_ENABLED : MF_GRAYED));
+#endif
+    }
+    void updateOcrBar() {
+        updateOcrAction();
+        if(!ocrToolbar) return;
+        if(activeDocument<0) { ocrToolbar->hide(); return; }
+        const auto& state=*documents[activeDocument];
+        const bool running=state.ocrRequested && !state.ocrComplete;
+        const bool failed=!state.ocrError.isEmpty();
+        ocrToolbar->setVisible(state.ocrPrompt || running || failed);
+        ocrApply->setVisible(state.ocrPrompt || failed);
+        ocrApply->setText(failed ? ocrLabel("Reintentar OCR","Retry OCR") : ocrLabel("Aplicar OCR","Apply OCR"));
+        ocrCancel->setText(running ? ocrLabel("Cancelar","Cancel") : ocrLabel("Ahora no","Not now"));
+        const auto text=failed ? ocrLabel("No se pudo completar el OCR. Podés reintentarlo.","OCR could not be completed. You can try again.") : running
+            ? ocrLabel("Aplicando OCR: página %1 de %2…","Applying OCR: page %1 of %2…").arg(std::clamp(state.ocrNextPage,1,pdf.pageCount())).arg(pdf.pageCount())
+            : ocrLabel("Este PDF parece contener páginas escaneadas. Aplicar OCR permitirá buscar y seleccionar su texto.","This PDF appears to contain scanned pages. Apply OCR to search and select their text.");
+        ocrMessage->setText(text); ocrMessage->setToolTip(failed ? text+"\n"+state.ocrError : text);
+    }
+    void beginDocumentOcr() {
+        if(activeDocument<0) return;
+        auto& state=*documents[activeDocument];
+        if(!state.ocrNeeded || state.ocrRequested) return;
+        state.ocrPrompt=false; state.ocrDismissed=false; state.ocrRequested=true;
+        state.ocrComplete=false; state.ocrNextPage=0; ++state.ocrGeneration;
+        state.ocrError.clear();
+        ++searchGeneration; searchBusy=false; searchTask->stop();
+        updateOcrBar();
+    }
+    void cancelDocumentOcr() {
+        if(activeDocument<0) return;
+        auto& state=*documents[activeDocument];
+        state.ocrPrompt=false; state.ocrRequested=false; state.ocrDismissed=true; state.ocrComplete=true; ++state.ocrGeneration;
+        state.ocrError.clear();
+        if(ocrRunningDocument==state.id) { ocrService->cancel(); ocrRunningDocument.clear(); }
+        updateOcrBar();
+        if(!searchInput->text().trimmed().isEmpty()) startSearch();
+    }
+    void offerDocumentOcr(int index) {
+        auto& state=*documents[index];
+        state.ocrNeeded=true;
+        if(documentPdf(index).pageCount()<=15) {
+            state.ocrRequested=true; state.ocrComplete=false; state.ocrNextPage=0;
+        } else { state.ocrPrompt=true; state.ocrComplete=true; }
+        if(index==activeDocument) {
+            updateOcrBar();
+            if(state.ocrPrompt && !searchInput->text().trimmed().isEmpty()) startSearch();
+        }
     }
     void showOcrProgress(int index) {
         if(index!=activeDocument) return;
         const auto& state=*documents[index];
+        updateOcrBar();
         auto text=ocrLabel("Preparando texto del documento: página %1 de %2…", "Preparing document text: page %1 of %2…")
             .arg(std::clamp(state.ocrNextPage,1,pdf.pageCount())).arg(pdf.pageCount());
-        statusBar()->show(); statusBar()->showMessage(text);
         if(!searchInput->text().trimmed().isEmpty()) searchStatus->setText(text);
     }
     void finishDocumentOcr(int index) {
-        auto& state=*documents[index]; state.ocrComplete=true;
+        auto& state=*documents[index];
+        if(state.ocrRequested && state.ocrError.isEmpty()) state.ocrNeeded=false;
+        state.ocrComplete=true; state.ocrRequested=false;
         if(index!=activeDocument) return;
-        statusBar()->clearMessage(); statusBar()->hide();
+        updateOcrBar();
         if(!searchInput->text().trimmed().isEmpty()) startSearch();
     }
     void processDocumentOcr() {
-        if(activeDocument<0 || documents[activeDocument]->ocrComplete) {
-            statusBar()->clearMessage(); statusBar()->hide();
-        }
+        updateOcrBar();
         if(!ocrService || ocrService->busy() || activeDocument<0) return;
         std::unique_lock lock(PdfDocument::apiMutex(),std::try_to_lock);
         if(!lock.owns_lock()) return;
         // Prioritize the visible document, then finish the other open documents.
         int target=activeDocument;
         if(documentOcrReady(target)) {
+            // Sampled native PDFs remain idle. Check only newly visited pages to
+            // detect mixed documents without traversing the rest of the book.
+            auto& active=*documents[target];
+            const int page=pdf.pageIndex();
+            if(!active.ocrRequested && !active.ocrPrompt && !active.ocrDismissed && active.ocrError.isEmpty() && !active.ocrChecked.contains(page)) {
+                active.ocrChecked.insert(page);
+                if(pdf.pageNeedsOcr(page)) offerDocumentOcr(target);
+            }
             target=-1;
             for(int i=0;i<int(documents.size());++i) if(!documentOcrReady(i)) { target=i; break; }
             if(target<0) return;
         }
         auto& state=*documents[target]; auto& document=documentPdf(target);
         if(!document.loaded()) return;
-        // Yield regularly while checking native text, even on very large documents.
-        for(int budget=0;budget<8;++budget) {
+        if(!state.ocrRequested) {
+            if(state.ocrSamplePage>=std::min(5,document.pageCount())) { finishDocumentOcr(target); return; }
+            const int page=state.ocrSamplePage++; state.ocrChecked.insert(page);
+            if(document.pageNeedsOcr(page)) offerDocumentOcr(target);
+            return;
+        }
+        // At most one isolated page per tick; close its PDFium document after use.
+        for(int budget=0;budget<1;++budget) {
             if(state.ocrNextPage>=document.pageCount()) { finishDocumentOcr(target); return; }
             const int page=state.ocrNextPage++;
-            if(document.hasOcr(page) || !document.pageText(page).trimmed().isEmpty()) continue;
+            if(!document.pageNeedsOcr(page)) continue;
             const auto id=state.id; const auto content=state.ocrContentRevision;
+            const auto generation=state.ocrGeneration;
             const auto size=document.pageSize(page);
             const double scale=size.isEmpty() ? 1.0 : std::min(3.0,2400.0/std::max(size.width(),size.height()));
-            const auto image=document.renderPage(page,scale);
+            const auto image=document.renderOcrPage(page,scale);
             showOcrProgress(target);
+            ocrRunningDocument=id;
             lock.unlock();
-            ocrService->recognize(image,size,[this,id,content,page,size](QVector<PdfDocument::OcrWord> words,QString error){
+            ocrService->recognize(image,size,[this,id,content,generation,page,size](QVector<PdfDocument::OcrWord> words,QString error){
+                ocrRunningDocument.clear();
                 int index=-1;
                 for(int i=0;i<int(documents.size());++i) if(documents[i]->id==id) { index=i; break; }
                 if(index<0) return;
                 auto& state=*documents[index]; auto& document=documentPdf(index);
-                if(document.contentRevision()!=content || state.ocrContentRevision!=content) return;
+                if(document.contentRevision()!=content || state.ocrContentRevision!=content || state.ocrGeneration!=generation || !state.ocrRequested) return;
                 if(!error.isEmpty()) { state.ocrError=error; finishDocumentOcr(index); return; }
                 for(auto& word:words) {
                     const auto r=word.rect;
@@ -1479,6 +1582,11 @@ private:
         quint64 ocrContentRevision=0;
         int ocrNextPage=0;
         bool ocrComplete=false;
+        int ocrSamplePage=0;
+        bool ocrRequested=false,ocrPrompt=false,ocrDismissed=false;
+        bool ocrNeeded=false;
+        quint64 ocrGeneration=0;
+        QSet<int> ocrChecked;
         QString ocrError;
         QString id=QUuid::createUuid().toString(QUuid::WithoutBraces);
         quint64 backupRevision=0;
@@ -1521,7 +1629,6 @@ private:
         if(!view->finishText()) { updateDocumentTabs(); return false; }
         stopAutoScroll();
         changingTabs=true; storeDocument(); activeDocument=index;
-        statusBar()->clearMessage(); statusBar()->hide();
         auto& doc=*documents[index]; pdf.swap(doc.stored); source=doc.path;
         resetSearch(); view->newDocument(); view->mode=doc.mode; view->fit=doc.fit; view->scale=doc.scale; view->rotation=doc.rotation;
         { QSignalBlocker a(viewMode),b(annotationScope),c(annotationTypeFilter); viewMode->setCurrentIndex(int(doc.mode)); annotationScope->setCurrentIndex(doc.scope); annotationTypeFilter->setCurrentIndex(doc.type); }
@@ -1560,6 +1667,21 @@ private:
     bool updatingView=false;
     QFileDialog::Options fileDialogOptions() const { return view->darkMode ? QFileDialog::DontUseNativeDialog : QFileDialog::Options(); }
     void error(QString value) { QMessageBox::warning(this,"GPDF",value); }
+    QPointer<QMessageBox> importantWarningPopup;
+    bool sessionSaveWarningShown=false;
+    void importantWarning(const QString& message) {
+        // Automatic checkpoints must not block or create a stack of dialogs.
+        if(importantWarningPopup && importantWarningPopup->isVisible()) {
+            importantWarningPopup->setText(message); importantWarningPopup->show(); importantWarningPopup->raise(); return;
+        }
+        auto popup=new QMessageBox(QMessageBox::Warning,"GPDF",message,QMessageBox::Ok,this);
+        popup->setObjectName("importantWarning"); popup->setAttribute(Qt::WA_DeleteOnClose);
+        importantWarningPopup=popup; popup->open();
+    }
+    bool sessionSaveFailure(const QString& message) {
+        if(!sessionSaveWarningShown) { sessionSaveWarningShown=true; importantWarning(message); }
+        return false;
+    }
     void resetSearch() {
         searchRevision=0;
         ++searchGeneration; searchBusy=false;
@@ -1663,12 +1785,11 @@ private:
         return save();
     }
     void documentOpened(const QString& path) {
-        statusBar()->clearMessage(); statusBar()->hide();
         source=QFileInfo(path).absoluteFilePath();
         { QSignalBlocker scopeBlocker(annotationScope); annotationScope->setCurrentIndex(0); QSignalBlocker typeBlocker(annotationTypeFilter); annotationTypeFilter->setCurrentIndex(0); }
         togglePanel->setChecked(false); { QSignalBlocker blocker(annotationSearch); annotationSearch->clear(); } resetSearch(); view->newDocument(); refresh(); scroll->verticalScrollBar()->setValue(0);
         restoreReading(); refreshPersonalBookmarks();
-        rememberFile(source); statusBar()->showMessage(gpdfTr("Abierto: ") + QFileInfo(source).fileName());
+        rememberFile(source);
     }
     void openPath(QString path,bool confirm=true) {
         Q_UNUSED(confirm);
@@ -1707,7 +1828,7 @@ private:
         source=QFileInfo(path).absoluteFilePath(); persistReading();
         if(activeDocument>=0) { documents[activeDocument]->discardOnExit=false; documents[activeDocument]->path=source; }
         refresh(selectedAnnotationIndex());
-        rememberFile(source); statusBar()->showMessage(gpdfTr("Guardado: ") + source); return true;
+        rememberFile(source); return true;
     }
     bool save() {
         if(!view->finishText()) return false;
@@ -1826,7 +1947,7 @@ private:
         auto value=studyMultilineText(this,freeText ? gpdfTr("Editar texto en la página") : gpdfTr("Editar comentario"),pdf.annotationContents(row),&accepted);
         if(!accepted) return;
         if(!pdf.editAnnotation(row,value)) { error(pdf.error()); return; }
-        refresh(row); statusBar()->showMessage(gpdfTr("Anotación editada. Guardar para conservar el cambio."));
+        refresh(row);
     }
     void colorSelected() {
         int row=selectedAnnotationIndex();
@@ -1837,14 +1958,13 @@ private:
         auto color=QColorDialog::getColor(current,this,gpdfTr("Color de la anotación"),view->darkMode ? QColorDialog::DontUseNativeDialog : QColorDialog::ColorDialogOptions());
         if(!color.isValid()) return;
         if(!pdf.recolorAnnotation(row,color)) { error(pdf.error()); return; }
-        refresh(row); statusBar()->showMessage(gpdfTr("Color actualizado."));
+        refresh(row);
     }
     void deleteSelected() {
         int row=selectedAnnotationIndex();
         if(!pdf.canEditAnnotation(row)) return;
         if(!pdf.removeAnnotation(row)) { error(pdf.error()); return; }
         refresh(std::min(row,pdf.annotationCount()-1));
-        statusBar()->showMessage(gpdfTr("Anotación borrada. Guardar para conservar el cambio."));
     }
     void refresh(int selected=-1) {
         std::lock_guard guard(PdfDocument::apiMutex());

@@ -42,7 +42,6 @@
 #include <QIconEngine>
 #include <QScrollArea>
 #include <QSplitter>
-#include <QStatusBar>
 #include <QToolBar>
 #include <QToolButton>
 #include <QMenu>

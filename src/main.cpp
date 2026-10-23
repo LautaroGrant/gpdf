@@ -3,7 +3,6 @@
 #include "WindowsIntegration.h"
 
 int main(int argc,char** argv) {
-    configureUiFontBackend();
     QApplication app(argc,argv);
     app.setApplicationName("GPDF");
     app.setApplicationVersion(GPDF_VERSION);

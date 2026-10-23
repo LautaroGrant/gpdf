@@ -26,6 +26,8 @@ public:
     quint64 contentRevision() const;
     bool applyOcr(int page,const QVector<OcrWord>& words);
     QString pageText(int page) const;
+    bool pageNeedsOcr(int page) const;
+    QImage renderOcrPage(int page,double scale) const;
     QVector<QPair<QString,QString>> properties() const;
     int characterCount() const;
     QPair<int,int> wordRange(int index) const;
@@ -73,8 +75,8 @@ public:
     bool saveCopy(const QString& path);
     bool diskChanged(const QString& path) const;
     bool reload(const QString& path) { const auto password=password_; return open(path,password); }
-    QImage render(double scale,QSize pixelSize={}) const;
-    QImage renderPage(int index, double scale,QSize pixelSize={}) const;
+    QImage render(double scale,QSize pixelSize={},bool lcdText=false) const;
+    QImage renderPage(int index, double scale,QSize pixelSize={},bool lcdText=false) const;
     QSizeF pageSize(int index) const;
     QPointF pageToNormalized(int index,QPointF point) const;
     QPointF normalizedToPage(int index,QPointF point) const;

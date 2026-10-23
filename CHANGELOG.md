@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 - October 23, 2026
+
+- Increased definition of letters and words.
+- Automatic OCR is limited to 15 pages document in order to save memory. Option and suggestion pop-ups to apply OCR for larger documents.
+- Overall better memory handling.
+
 ## 0.3.0 — October 22, 2026
 
 - Implementation of automatic local Windows OCR for scanned PDF pages, using the OCR languages installed in Windows without bundling additional recognition models.

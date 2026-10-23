@@ -1,18 +1,24 @@
 #include "PageView.h"
-#include "UiFont.h"
 #include <QApplication>
 #include <QDir>
 #include <iostream>
 #include <stdexcept>
 
 int main(int argc,char** argv) {
-    configureUiFontBackend(); QApplication app(argc,argv);
+    QApplication app(argc,argv);
     try {
         auto require=[](bool ok,const char* message) { if(!ok) throw std::runtime_error(message); };
+        {
+            PdfDocument text; require(text.createSample(),"create LCD text fixture");
+            auto grayscale=text.render(1.17); auto lcd=text.render(1.17,{},true);
+            require(lcd.size()==grayscale.size() && lcd.sizeInBytes()==grayscale.sizeInBytes(),"LCD text must not increase raster size or storage");
+            require(lcd.format()==QImage::Format_RGB32,"LCD rendering requires an opaque image");
+            require(lcd!=grayscale.convertToFormat(QImage::Format_RGB32),"LCD text must change glyph coverage rather than silently fall back to grayscale");
+        }
         require(argc>=2,"PDF fixture required");
-        PdfDocument pdf; require(pdf.open(QString::fromLocal8Bit(argv[1])),"open quality fixture");
+        PdfDocument pdf; require(pdf.open(app.arguments().at(1)),"open quality fixture");
         QWidget host;
-        PdfDocument reference; require(reference.open(QString::fromLocal8Bit(argv[1])),"open independent reference document");
+        PdfDocument reference; require(reference.open(app.arguments().at(1)),"open independent reference document");
         PageView view(pdf); view.setParent(&host); view.move(7,9);
         view.newDocument(); view.setMode(PageView::Single);
         view.setViewportSize({920,1100}); view.setZoom(1.17); view.show(); host.show();
@@ -30,7 +36,7 @@ int main(int argc,char** argv) {
                 QRect physical(QPoint(qRound(logical.left()*dpr),qRound(logical.top()*dpr)),
                                QSize(qRound(logical.width()*dpr),qRound(logical.height()*dpr)));
                 QSize raster=physical.size(); if(turn%2) raster.transpose();
-                auto expected=reference.renderPage(page,view.effectiveScale*dpr,raster);
+                auto expected=reference.renderPage(page,view.effectiveScale*dpr,raster,turn==0);
                 if(turn) expected=expected.transformed(QTransform().rotate(turn*90));
                 auto actual=capture.copy(physical).convertToFormat(QImage::Format_RGB32);
                 expected=expected.convertToFormat(QImage::Format_RGB32);

@@ -329,10 +329,13 @@ protected:
                 if(area>pixels) rasterSize=(QSizeF(rasterSize)*std::sqrt(pixels/area)).toSize();
                 if(turn%2) rasterSize.transpose();
                 double zoom=effectiveScale*dpr;
+                // Subpixel text must stay aligned with the physical display:
+                // do not rotate its RGB coverage or stretch a capped raster.
+                const bool lcdText=turn==0 && rasterSize==QSize(int(std::lround(r.width()*dpr)),int(std::lround(r.height()*dpr)));
                 quint64 revision=pdf.revision(); QPointer<PageView> target(this);
-                workers.start([target,i,generation,turn,zoom,revision,rasterSize]{
+                workers.start([target,i,generation,turn,zoom,revision,rasterSize,lcdText]{
                     QImage rendered;
-                    { std::lock_guard guard(PdfDocument::apiMutex()); if(target && target->cacheGeneration==generation && i>=target->visibleFirst && i<=target->visibleLast && target->pdf.revision()==revision) rendered=target->pdf.renderPage(i,zoom,rasterSize); }
+                    { std::lock_guard guard(PdfDocument::apiMutex()); if(target && target->cacheGeneration==generation && i>=target->visibleFirst && i<=target->visibleLast && target->pdf.revision()==revision) rendered=target->pdf.renderPage(i,zoom,rasterSize,lcdText); }
                     if(turn && !rendered.isNull()) rendered=rendered.transformed(QTransform().rotate(turn*90));
                     QImage preview=rendered.isNull() ? QImage() : rendered.scaled(QSize(512,512),Qt::KeepAspectRatio,Qt::SmoothTransformation);
                     if(target) QMetaObject::invokeMethod(target.data(),[target,i,generation,rendered,preview]{

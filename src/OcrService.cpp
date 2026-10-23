@@ -58,6 +58,11 @@ void OcrService::finish(QString error) {
     const auto payload=process_.readAllStandardOutput();
     complete(payload,error);
 }
+void OcrService::cancel() {
+    completion_={}; timeout_.stop();
+    if(process_.state()!=QProcess::NotRunning) { process_.kill(); process_.waitForFinished(1000); }
+    QFile::remove(temporary_.filePath("page.png"));
+}
 void OcrService::complete(const QByteArray& payload,QString error) {
     const auto json=QJsonDocument::fromJson(payload).object();
     if(error.isEmpty() && !json.value("words").isArray()) error="Windows OCR returned no valid result.";

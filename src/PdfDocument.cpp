@@ -208,6 +208,51 @@ QString PdfDocument::pageText(int index) const { std::lock_guard apiGuard(pdfium
     if(text) { int count=FPDFText_CountChars(text); QVector<unsigned short> buffer(count+1); FPDFText_GetText(text,0,count,buffer.data()); result=QString::fromUtf16(reinterpret_cast<const char16_t*>(buffer.constData())); FPDFText_ClosePage(text); }
     FPDF_ClosePage(page); return result;
 }
+bool PdfDocument::pageNeedsOcr(int index) const {
+    std::lock_guard guard(pdfiumMutex);
+    if(!doc_ || index<0 || index>=pageCount() || hasOcr(index)) return false;
+    // PDFium retains resources even after closing a text page. Use a short-lived
+    // document so checking an entire book cannot accumulate those resources.
+    PdfDocument isolated;
+    FPDF_DOCUMENT source=doc_;
+    if(!bytes_.isEmpty()) {
+        isolated.bytes_=bytes_;
+        isolated.doc_=FPDF_LoadMemDocument64(isolated.bytes_.constData(),size_t(isolated.bytes_.size()),password_.constData());
+        if(!isolated.doc_) return false;
+        source=isolated.doc_;
+    }
+    auto page=FPDF_LoadPage(source,index); if(!page) return false;
+    std::unique_ptr<std::remove_pointer_t<FPDF_PAGE>,decltype(&FPDF_ClosePage)> pageGuard(page,&FPDF_ClosePage);
+    bool image=false;
+    std::function<void(FPDF_PAGEOBJECT,int)> inspect=[&](FPDF_PAGEOBJECT object,int depth) {
+        if(depth>16 || image) return;
+        const int type=FPDFPageObj_GetType(object);
+        if(type==FPDF_PAGEOBJ_IMAGE) {
+            float left=0,bottom=0,right=0,top=0;
+            if(FPDFPageObj_GetBounds(object,&left,&bottom,&right,&top) && right>left && top>bottom) image=true;
+        } else if(type==FPDF_PAGEOBJ_FORM) {
+            for(int i=0;i<FPDFFormObj_CountObjects(object);++i) inspect(FPDFFormObj_GetObject(object,i),depth+1);
+        }
+    };
+    for(int i=0;i<FPDFPage_CountObjects(page) && !image;++i) inspect(FPDFPage_GetObject(page,i),0);
+    if(!image) return false; // Empty pages and native vector/text pages need no OCR.
+    auto text=FPDFText_LoadPage(page); if(!text) return false;
+    int readable=0;
+    for(int i=0;i<FPDFText_CountChars(text) && readable<20;++i)
+        if(QChar::isLetterOrNumber(FPDFText_GetUnicode(text,i))) ++readable;
+    FPDFText_ClosePage(text);
+    return readable<20; // A printed page number alone is not a usable text layer.
+}
+QImage PdfDocument::renderOcrPage(int index,double scale) const {
+    std::lock_guard guard(pdfiumMutex);
+    if(bytes_.isEmpty()) return renderPage(index,scale);
+    PdfDocument isolated;
+    isolated.bytes_=bytes_;
+    isolated.doc_=FPDF_LoadMemDocument64(isolated.bytes_.constData(),size_t(isolated.bytes_.size()),password_.constData());
+    if(!isolated.doc_) return {};
+    isolated.index_=-1; // No current page is held by this temporary document.
+    return isolated.renderPage(index,scale);
+}
 int PdfDocument::characterCount() const { std::lock_guard apiGuard(pdfiumMutex); return ocrPages_.contains(index_) ? int(ocrPages_[index_].text.size()) : (text_ ? FPDFText_CountChars(text_) : 0); }
 int PdfDocument::moveCommentAnnotation(int sourcePage,int index,int destinationPage,QPointF topLeft) {
     std::lock_guard apiGuard(pdfiumMutex);
@@ -364,19 +409,21 @@ bool PdfDocument::setPage(int index) { std::lock_guard apiGuard(pdfiumMutex);
 }
 int PdfDocument::pageCount() const { std::lock_guard apiGuard(pdfiumMutex); return doc_ ? FPDF_GetPageCount(doc_) : 0; }
 QSizeF PdfDocument::pageSize() const { std::lock_guard apiGuard(pdfiumMutex); return page_ ? QSizeF(FPDF_GetPageWidthF(page_), FPDF_GetPageHeightF(page_)) : QSizeF(); }
-QImage PdfDocument::render(double scale,QSize pixelSize) const { std::lock_guard apiGuard(pdfiumMutex);
+QImage PdfDocument::render(double scale,QSize pixelSize,bool lcdText) const { std::lock_guard apiGuard(pdfiumMutex);
     if (!page_ || !std::isfinite(scale) || scale<=0) return {};
     QSize size = pixelSize.isEmpty() ? (pageSize() * scale).toSize() : pixelSize;
     if(size.width()<=0 || size.height()<=0) return {};
     if(qint64(size.width())*size.height()>16LL*1024*1024) size=(QSizeF(size)*std::sqrt(16.0*1024*1024/(double(size.width())*size.height()))).toSize();
-    QImage image(size, QImage::Format_ARGB32);
+    // PDFium's LCD text path needs an opaque bitmap. BGRA forces grayscale
+    // antialiasing even when FPDF_LCD_TEXT is requested.
+    QImage image(size, lcdText ? QImage::Format_RGB32 : QImage::Format_ARGB32);
     image.fill(Qt::white);
-    auto bitmap = FPDFBitmap_CreateEx(size.width(), size.height(), FPDFBitmap_BGRA, image.bits(), image.bytesPerLine());
+    auto bitmap = FPDFBitmap_CreateEx(size.width(), size.height(), lcdText ? FPDFBitmap_BGRx : FPDFBitmap_BGRA, image.bits(), image.bytesPerLine());
     if (!bitmap) return {};
     auto hidden=hiddenTextPreview>=0 ? FPDFPage_GetAnnot(page_,hiddenTextPreview) : nullptr;
     int flags=hidden ? FPDFAnnot_GetFlags(hidden) : 0;
     if(hidden) FPDFAnnot_SetFlags(hidden,flags|FPDF_ANNOT_FLAG_HIDDEN);
-    FPDF_RenderPageBitmap(bitmap, page_, 0, 0, size.width(), size.height(), 0, FPDF_ANNOT);
+    FPDF_RenderPageBitmap(bitmap, page_, 0, 0, size.width(), size.height(), 0, FPDF_ANNOT | (lcdText ? FPDF_LCD_TEXT : 0));
     if(hidden) { FPDFAnnot_SetFlags(hidden,flags); FPDFPage_CloseAnnot(hidden); }
     FPDFBitmap_Destroy(bitmap);
     return image;
@@ -403,20 +450,20 @@ QPointF PdfDocument::normalizedToPage(int index,QPointF point) const { std::lock
     if(index!=index_) FPDF_ClosePage(page);
     return ok ? QPointF(x,y) : QPointF();
 }
-QImage PdfDocument::renderPage(int index,double scale,QSize pixelSize) const { std::lock_guard apiGuard(pdfiumMutex);
+QImage PdfDocument::renderPage(int index,double scale,QSize pixelSize,bool lcdText) const { std::lock_guard apiGuard(pdfiumMutex);
     if(!doc_ || index<0 || index>=pageCount() || !std::isfinite(scale) || scale<=0) return {};
-    if(index==index_) return render(scale,pixelSize);
+    if(index==index_) return render(scale,pixelSize,lcdText);
     auto page=FPDF_LoadPage(doc_,index);
     if(!page) return {};
     std::unique_ptr<std::remove_pointer_t<FPDF_PAGE>,decltype(&FPDF_ClosePage)> pageGuard(page,&FPDF_ClosePage);
     QSize size=pixelSize.isEmpty() ? (pageSize(index)*scale).toSize() : pixelSize;
     if(size.width()<=0 || size.height()<=0) return {};
     if(qint64(size.width())*size.height()>16LL*1024*1024) size=(QSizeF(size)*std::sqrt(16.0*1024*1024/(double(size.width())*size.height()))).toSize();
-    QImage image(size,QImage::Format_ARGB32);
+    QImage image(size,lcdText ? QImage::Format_RGB32 : QImage::Format_ARGB32);
     if(!image.isNull()) {
         image.fill(Qt::white);
-        auto bitmap=FPDFBitmap_CreateEx(size.width(),size.height(),FPDFBitmap_BGRA,image.bits(),image.bytesPerLine());
-        if(bitmap) { FPDF_RenderPageBitmap(bitmap,page,0,0,size.width(),size.height(),0,FPDF_ANNOT); FPDFBitmap_Destroy(bitmap); }
+        auto bitmap=FPDFBitmap_CreateEx(size.width(),size.height(),lcdText ? FPDFBitmap_BGRx : FPDFBitmap_BGRA,image.bits(),image.bytesPerLine());
+        if(bitmap) { FPDF_RenderPageBitmap(bitmap,page,0,0,size.width(),size.height(),0,FPDF_ANNOT | (lcdText ? FPDF_LCD_TEXT : 0)); FPDFBitmap_Destroy(bitmap); }
         else image={};
     }
     return image;

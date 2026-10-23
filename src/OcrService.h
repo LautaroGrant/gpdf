@@ -12,6 +12,7 @@ public:
     explicit OcrService(QObject* parent=nullptr);
     ~OcrService() override;
     bool busy() const { return bool(completion_); }
+    void cancel();
     void recognize(const QImage& image,QSizeF pageSize,Completion completion);
 private:
     void finish(QString error={});

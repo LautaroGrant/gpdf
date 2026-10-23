@@ -1,4 +1,4 @@
-# GPDF 0.3.0 (Beta)
+# GPDF 0.3.1 (Beta)
 
 GPDF is a minimalist, lightweight and efficient PDF reader and annotation editor for Windows x64, built with C++, Qt Widgets and PDFium.
 

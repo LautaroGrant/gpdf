@@ -30,7 +30,6 @@ public:
 #endif
 
 int main(int argc,char** argv) {
-    configureUiFontBackend();
     QApplication app(argc,argv); app.setStyle("Fusion"); app.setFont(gpdfUiFont());
     if(app.arguments().size()>=3 && app.arguments()[1]=="--instance-client") {
         SingleInstance client(app.arguments()[2]);
@@ -103,7 +102,7 @@ int main(int argc,char** argv) {
             Window emptyWindow;
             emptyWindow.show();
             app.processEvents();
-            require(emptyWindow.statusBar()->isHidden(),"status description bar stays hidden");
+            require(!emptyWindow.findChild<QWidget*>("QMainWindowStatusBar"),"no unused description bar is created");
             for(const auto size:{QSize(800,600),QSize(640,480),QSize(1024,768)}) {
                 emptyWindow.resize(size); app.processEvents(); app.processEvents();
                 auto area=emptyWindow.findChild<QScrollArea*>();
@@ -1190,8 +1189,12 @@ int main(int argc,char** argv) {
             auto readBytes=[](const QString& path) { QFile file(path); if(!file.open(QIODevice::ReadOnly)) return QByteArray(); return file.readAll(); };
             auto original=readBytes(fixture), other=readBytes(second);
             require(!exporter.exportAnnotationsTo(second) && !exporter.exportAnnotationsTo(fixture),"export cannot overwrite either open PDF");
+            auto exportWarning=exporter.findChild<QMessageBox*>("importantWarning");
+            require(exportWarning && exportWarning->isVisible() && exportWarning->text().contains("documento abierto"),"export rejection is visible as a popup");
             require(readBytes(fixture)==original && readBytes(second)==other,"rejected export preserves PDF bytes");
             require(!exporter.exportAnnotationsTo(directory.path()+"/invalid.pdf"),"export requires supported extension");
+            require(exporter.findChildren<QMessageBox*>("importantWarning").size()==1,"export warnings do not stack dialogs");
+            exportWarning->close();
             for(const auto& extension:{"md","txt","html"}) require(exporter.exportAnnotationsTo(directory.path()+"/safe."+extension),"supported export formats remain available");
         }
         {
@@ -1207,13 +1210,16 @@ int main(int argc,char** argv) {
             QMouseEvent selectPress(QEvent::MouseButtonPress,point,canvas->mapToGlobal(point.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(canvas,&selectPress);
             require(canvas->searchPage==-1 && canvas->searchRects.isEmpty(),"manual selection clears search overlay after switching documents");
             canvas->first=0; canvas->last=10;
+            const auto selectionBaseline=canvas->grab(canvas->deviceRect(rectangles.first()).toAlignedRect()).toImage();
             // A queued search result must not paint yellow over an active selection.
             canvas->searchPage=canvas->pdf.pageIndex(); canvas->searchRects=rectangles;
             auto selectionImage=canvas->grab(canvas->deviceRect(rectangles.first()).toAlignedRect()).toImage(); int blue=0,yellow=0;
             for(int y=0;y<selectionImage.height();++y) for(int x=0;x<selectionImage.width();++x) { auto color=selectionImage.pixelColor(x,y); if(color.blue()>color.red()+10 && color.blue()>color.green()+5) ++blue; if(color.red()>color.blue()+20 && color.green()>color.blue()+10) ++yellow; }
             if(!output.isEmpty()) selectionImage.save(output+"/selection-blue.png");
-            if(blue<=20 || yellow>0) std::cerr<<"Selection pixels: blue="<<blue<<", yellow="<<yellow<<"\n";
-            require(blue>20 && yellow==0,"normal selection remains blue with active search and multiple documents");
+            // LCD glyph edges can contain yellow subpixels. Compare the full
+            // selection to its baseline instead of mistaking those for a search overlay.
+            if(blue<=20 || selectionImage!=selectionBaseline) std::cerr<<"Selection pixels: blue="<<blue<<", yellow="<<yellow<<"\n";
+            require(blue>20 && selectionImage==selectionBaseline,"normal selection remains blue with active search and multiple documents");
             canvas->resetSelection(); canvas->searchPage=-1; canvas->searchRects.clear();
             selectionWindow.findChild<QComboBox*>("viewMode")->setCurrentIndex(2); settle();
             auto contentPixels=[&]{ auto image=canvas->grab(canvas->pageRects[0].toAlignedRect()).toImage(); int dark=0; for(int y=0;y<image.height();++y) for(int x=0;x<image.width();++x) if(image.pixelColor(x,y).lightness()<100) ++dark; return dark; };
@@ -1260,6 +1266,29 @@ int main(int argc,char** argv) {
             reader.findChild<QComboBox*>("viewMode")->setCurrentIndex(1); require(reader.saveSession(),"persist reading after view change");
             Window later; later.loadPath(readingPdf); PageView* reopened=nullptr; for(auto widget:later.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) reopened=page;
             require(reopened->pdf.pageIndex()==2 && qFuzzyCompare(reopened->scale,1.75) && later.findChild<QListWidget*>("personalBookmarks")->count()==1,"reading state and personal bookmarks survive new window");
+        }
+        {
+            QTemporaryDir recoverySettings;
+            QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,recoverySettings.path());
+            {
+                Window recovery; recovery.openDocument(fixture);
+                require(recovery.saveSession(),"initial recovery checkpoint");
+                QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+                QDir root(QFileInfo(settings.fileName()).absolutePath()+"/recovery");
+                auto manifest=SessionStore::read(root);
+                const auto backup=manifest["documents"].toArray()[0].toObject()["id"].toString()+".pdf";
+                require(root.mkdir(backup),"block recovery file with a directory");
+                PageView* page=nullptr;
+                for(auto widget:recovery.findChildren<QWidget*>()) if(auto candidate=dynamic_cast<PageView*>(widget)) page=candidate;
+                require(page && page->pdf.note({60,680},"Recovery failure test"),"dirty recovery fixture");
+                require(!recovery.saveSession(),"failed recovery checkpoint is reported");
+                QPointer<QMessageBox> warning=recovery.findChild<QMessageBox*>("importantWarning");
+                require(warning && warning->isVisible() && warning->text().contains("recuperación"),"recovery failure shows a popup");
+                warning->close();
+                require(!recovery.saveSession() && (!warning || !warning->isVisible()),"automatic retries do not reopen a dismissed recovery warning");
+                require(root.rmdir(backup) && recovery.saveSession(),"recovery resumes after storage is available");
+            }
+            QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,directory.path());
         }
         // The original fixture remains alive. Its checkpoint must not overwrite
         // the independent recovery fixtures during their nested password dialogs.
