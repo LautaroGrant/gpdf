@@ -72,6 +72,45 @@ int main(int argc,char** argv) {
             std::cout<<"PASS: "<<checked<<" real PDF word/line click checks across "<<document.pageCount()<<" pages and four rotations.\n";
             return 0;
         }
+        if(app.arguments().size()==3 && app.arguments()[1]=="--theme-panels-probe") {
+            QTemporaryDir settingsDirectory;
+            QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settingsDirectory.path());
+            // Start under a dark system palette with the application's light mode selected.
+            auto systemPalette=app.palette();
+            systemPalette.setColor(QPalette::Window,QColor("#252b35"));
+            app.setPalette(systemPalette);
+            Window reader;
+            const auto output=app.arguments()[2]; QDir().mkpath(output);
+            reader.show();
+            auto dark=reader.findChild<QAction*>("darkModeAction");
+            auto search=reader.findChild<QAction*>("searchAction");
+            auto annotations=reader.findChild<QAction*>("toggleAnnotations");
+            require(dark && search && annotations,"panel probe actions available");
+            auto check=[&](const QString& name,bool night) {
+                search->setChecked(true); annotations->setChecked(true); app.processEvents();
+                for(const auto* id:{"searchPanel","annotationsPanel"}) {
+                    auto panel=reader.findChild<QWidget*>(id); require(panel && panel->isVisible(),"panel visible for pixel check");
+                    const auto pixels=panel->grab().toImage();
+                    // These margin pixels belong to the container, not its white input fields.
+                    for(const auto point:{QPoint(2,2),QPoint(2,pixels.height()/2),QPoint(2,pixels.height()-3)}) {
+                        const auto background=pixels.pixelColor(point);
+                        require(night ? background.lightness()<80 : background.lightness()>200,"panel actually paints the selected theme");
+                        require(background==panel->palette().color(QPalette::Window),"painted panel background matches palette");
+                    }
+                    for(auto label:panel->findChildren<QLabel*>())
+                        require(night ? label->palette().color(QPalette::WindowText).lightness()>180 : label->palette().color(QPalette::WindowText).lightness()<100,"panel labels contrast with background");
+                }
+                require(reader.grab().save(output+"/"+name+".png"),"save panel theme evidence");
+            };
+            check("panels-light-startup",false);
+            for(int cycle=0;cycle<2;++cycle) {
+                dark->trigger(); check(QString("panels-dark-%1").arg(cycle),true);
+                search->setChecked(false); annotations->setChecked(false);
+                dark->trigger(); check(QString("panels-light-restored-%1").arg(cycle),false);
+            }
+            std::cout<<"PASS: search and annotation panel pixels, label contrast, dark-system startup and repeated hidden-panel theme changes.\n";
+            return 0;
+        }
         QString instanceKey="GPDF-test-"+QString::number(QCoreApplication::applicationPid());
         SingleInstance instance(instanceKey);
         require(instance.start({})==SingleInstance::Primary,"single instance becomes owner");
@@ -214,7 +253,7 @@ int main(int argc,char** argv) {
                 auto getAttribute=dwm ? reinterpret_cast<GetAttribute>(GetProcAddress(dwm,"DwmGetWindowAttribute")) : nullptr;
                 COLORREF caption=0;
                 if(getAttribute && SUCCEEDED(getAttribute(reinterpret_cast<HWND>(reader.winId()),35,&caption,sizeof(caption))))
-                    require(caption==0xffffffff,"day mode restores the system caption color");
+                    require(caption==RGB(243,244,246),"day mode uses explicit light caption even with a dark system theme");
             }
 #endif
             if(!output.isEmpty()) reader.grab().save(output+"/theme-light.png");
@@ -1098,28 +1137,13 @@ int main(int argc,char** argv) {
             window.findChild<QAction*>(name)->trigger(); require(themed,"application dialog follows night theme");
         }
         // Native Print dialog dismissal test temporarily omitted at the user's request.
-        for(const auto& name:{"openFileAction"}) {
-#ifdef Q_OS_WIN
-            if(QApplication::platformName()=="windows") {
-                std::atomic<bool> nativeSeen=false,finished=false;
-                std::cerr<<"Native dialog test: "<<name<<std::endl;
-                std::thread dismiss([&]{ auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(12); while(!finished) {
-                    if(std::chrono::steady_clock::now()>deadline) { std::cerr<<"Native dialog test timed out; seen="<<nativeSeen<<std::endl; std::_Exit(1); }
-                    EnumWindows([](HWND hwnd,LPARAM data)->BOOL {
-                        DWORD process=0; GetWindowThreadProcessId(hwnd,&process); if(process!=GetCurrentProcessId()) return TRUE;
-                        wchar_t kind[128]{}; GetClassNameW(hwnd,kind,128);
-                        if(IsWindowVisible(hwnd) && wcscmp(kind,L"#32770")==0) { *reinterpret_cast<std::atomic<bool>*>(data)=true; std::this_thread::sleep_for(std::chrono::milliseconds(250)); PostMessageW(hwnd,WM_COMMAND,MAKEWPARAM(IDCANCEL,BN_CLICKED),reinterpret_cast<LPARAM>(GetDlgItem(hwnd,IDCANCEL))); }
-                        return TRUE;
-                    },reinterpret_cast<LPARAM>(&nativeSeen));
-                    std::this_thread::sleep_for(std::chrono::milliseconds(25));
-                } });
-                window.findChild<QAction*>(name)->trigger(); finished=true; dismiss.join(); std::cerr<<"Native dialog returned: "<<name<<std::endl; require(nativeSeen,"Open keeps original Windows dialog at night");
-                continue;
-            }
-#endif
-            bool shown=false;
-            QTimer::singleShot(0,[&]{ if(auto dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget())) { shown=true; dialog->reject(); } });
-            window.findChild<QAction*>(name)->trigger(); require(shown,"Open dialog available on non-native test platform");
+        {
+            bool themed=false;
+            QTimer::singleShot(0,[&]{ if(auto dialog=qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
+                themed=dialog->testOption(QFileDialog::DontUseNativeDialog) && dialog->palette().color(QPalette::Window).lightness()<100;
+                dialog->reject();
+            } });
+            window.findChild<QAction*>("openFileAction")->trigger(); require(themed,"Open dialog follows application night theme");
         }
         auto navTabs=window.findChild<QTabWidget*>("navigationPanel"); int previousNavigation=navTabs->currentIndex(); navTabs->setCurrentIndex(2);
         if(!output.isEmpty()) iconToolbar->grab().save(output+"/tool-icons-dark.png");
@@ -1127,6 +1151,22 @@ int main(int argc,char** argv) {
         darkSearch->setVisible(searchWasVisible); annotationPanel->setVisible(annotationsWereVisible);
         dark->trigger();
         require(list->palette().color(QPalette::Text).lightness()<100,"light panel text restored");
+        app.processEvents();
+        for(auto group:{QPalette::Active,QPalette::Inactive,QPalette::Disabled}) {
+            for(auto widget:window.findChildren<QWidget*>()) {
+                for(auto role:{QPalette::Window,QPalette::Base,QPalette::Button,QPalette::AlternateBase,QPalette::ToolTipBase})
+                    require(widget->palette().color(group,role).lightness()>200,"all light UI surfaces restored after dark mode");
+            }
+        }
+        for(const auto* name:{"propertiesAction","configureShortcutsAction","goPage","saveAsFileAction","exportAnnotationsAction","openFileAction"}) {
+            bool lightDialog=false;
+            QTimer::singleShot(0,[&]{ if(auto dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+                lightDialog=dialog->palette().color(QPalette::Window).lightness()>200 && dialog->palette().color(QPalette::Text).lightness()<100;
+                if(!output.isEmpty()) dialog->grab().save(output+"/light-"+QString(name)+".png");
+                dialog->reject();
+            } });
+            window.findChild<QAction*>(name)->trigger(); require(lightDialog,"new dialogs follow restored light theme");
+        }
         checkToolIcons(false); if(!output.isEmpty()) iconToolbar->grab().save(output+"/tool-icons-light.png");
         auto full=window.findChild<QAction*>("fullscreenAction"); full->trigger(); app.processEvents(); require(window.isFullScreen(),"fullscreen enters");
 #ifdef Q_OS_WIN

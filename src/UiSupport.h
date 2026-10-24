@@ -146,8 +146,8 @@ inline void applyNativeWindowTheme(HWND hwnd,bool enabled) {
     BOOL dark=enabled;
     setAttribute(hwnd,20,&dark,sizeof(dark));
     // Explicit caption colors also update an already visible Windows 11 frame.
-    COLORREF caption=enabled ? RGB(37,43,53) : 0xffffffff;
-    COLORREF text=enabled ? RGB(229,231,235) : 0xffffffff;
+    COLORREF caption=enabled ? RGB(37,43,53) : RGB(243,244,246);
+    COLORREF text=enabled ? RGB(229,231,235) : RGB(32,37,45);
     setAttribute(hwnd,35,&caption,sizeof(caption));
     setAttribute(hwnd,36,&text,sizeof(text));
     // Repaint the caption without recalculating the frame during Qt state transitions.

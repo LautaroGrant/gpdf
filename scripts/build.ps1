@@ -17,6 +17,7 @@ if ($LASTEXITCODE) { throw 'Falló la compilación.' }
 & "$qt/bin/windeployqt.exe" --release --no-translations --no-opengl-sw "$build/GPDF.exe"
 if ($LASTEXITCODE) { throw 'Falló el despliegue de Qt.' }
 Copy-Item "$qt/plugins/platforms/qoffscreen.dll" "$build/platforms/" -Force
+if (!(Test-Path -LiteralPath "$build/tls/qschannelbackend.dll")) { throw 'Falta el componente HTTPS de Qt en la compilación.' }
 & "$root/.tools/python/cmake/data/bin/ctest.exe" --test-dir "$build" --output-on-failure
 if ($LASTEXITCODE) { throw 'Fallaron las pruebas del proyecto.' }
 if ($Package) {
@@ -25,6 +26,8 @@ if ($Package) {
     Copy-Item "$build/GPDF.exe","$build/pdfium.dll" $dist
     & "$qt/bin/windeployqt.exe" --release --no-translations --no-opengl-sw "$dist/GPDF.exe"
     if ($LASTEXITCODE) { throw 'Falló el empaquetado.' }
+    New-Item -ItemType Directory -Force "$dist/tls" | Out-Null
+    Copy-Item -LiteralPath "$build/tls/qschannelbackend.dll" -Destination "$dist/tls/" -Force
     Copy-Item "$root/README.md","$root/README.es.md","$root/CHANGELOG.md","$root/VERSION" $dist
     $revision=& git -C $root rev-parse HEAD 2>$null
     $dirty=if($LASTEXITCODE -eq 0) { [bool](& git -C $root status --porcelain) } else { $null }

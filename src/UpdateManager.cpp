@@ -55,6 +55,10 @@ void UpdateManager::startAutomaticCheck() {
 }
 void UpdateManager::check(bool manual) {
     if(busy) { if(manual) QMessageBox::information(window,gpdfTr("Actualizaciones"),gpdfTr("Ya hay una comprobación o descarga en curso.")); return; }
+    if(!QSslSocket::supportsSsl()) {
+        if(manual) QMessageBox::warning(window,gpdfTr("Actualizaciones"),gpdfTr("Falta el componente HTTPS de GPDF. Volver a instalar el programa completo para consultar GitHub."));
+        return;
+    }
     busy=true;
     auto reply=network->get(request(QUrl("https://api.github.com/repos/LautaroGrant/gpdf/releases/latest")));
     reply->setReadBufferSize(1024*1024+1);

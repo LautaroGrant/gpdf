@@ -1041,6 +1041,10 @@ Created by Lautaro Grant</translation>
       <translation>A check or download is already in progress.</translation>
     </message>
     <message>
+      <source>Falta el componente HTTPS de GPDF. Volver a instalar el programa completo para consultar GitHub.</source>
+      <translation>GPDF's HTTPS component is missing. Reinstall the complete application to contact GitHub.</translation>
+    </message>
+    <message>
       <source>No se pudo consultar GitHub. Comprobar la conexión e intentar más tarde.</source>
       <translation>Could not contact GitHub. Check your connection and try again later.</translation>
     </message>

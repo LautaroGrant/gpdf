@@ -5,6 +5,8 @@
 - Increased definition of letters and words.
 - Automatic OCR is limited to 15 pages document in order to save memory. Option and suggestion pop-ups to apply OCR for larger documents.
 - Overall better memory handling.
+- Fixed graphical glitch that flickered to dark mode while in day mode.
+- Fixed error from automatic Updater unable to connect to Github releases.
 
 ## 0.3.0 — October 22, 2026
 

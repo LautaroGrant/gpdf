@@ -33,6 +33,7 @@ public:
         annotations->setToolTip(gpdfTr("Seleccionar una anotación para editarla, cambiar su color o borrarla. Doble clic para editar el comentario."));
         auto panel=new QWidget;
         panel->setObjectName("annotationsPanel");
+        panel->setAutoFillBackground(true);
         auto panelLayout=new QVBoxLayout(panel);
         panelLayout->setContentsMargins(8,8,8,8);
         panelLayout->addWidget(new QLabel(gpdfTr("Anotaciones")));
@@ -60,6 +61,9 @@ public:
         connect(colorButton,&QPushButton::clicked,[this]{ colorSelected(); });
         connect(deleteButton,&QPushButton::clicked,[this]{ deleteSelected(); });
         auto splitter = new QSplitter;
+        // Paint container surfaces with the current palette instead of exposing
+        // a native window background left over from the previous theme.
+        splitter->setAutoFillBackground(true);
         navigationPanel=new QTabWidget; navigationPanel->setObjectName("navigationPanel"); navigationPanel->setMinimumWidth(240); navigationPanel->setMaximumWidth(280);
         thumbnails=new QListWidget; thumbnails->setObjectName("thumbnails"); thumbnails->setViewMode(QListView::IconMode); thumbnails->setFlow(QListView::TopToBottom); thumbnails->setWrapping(false); thumbnails->setIconSize(QSize(140,190)); thumbnails->setGridSize(QSize(160,220)); thumbnails->setResizeMode(QListView::Adjust); thumbnails->setMovement(QListView::Static); thumbnails->setDragDropMode(QAbstractItemView::NoDragDrop); thumbnails->setDragEnabled(false); thumbnails->setAcceptDrops(false);
         outline=new QTreeWidget; outline->setObjectName("documentBookmarks"); outline->setHeaderHidden(true);
@@ -77,6 +81,7 @@ public:
         connect(thumbnails->verticalScrollBar(),&QScrollBar::valueChanged,[this]{ requestThumbnails(); });
         connect(navigationPanel,&QTabWidget::currentChanged,[this]{ requestThumbnails(); syncViewActions(); });
         searchPanel=new QWidget; searchPanel->setObjectName("searchPanel");
+        searchPanel->setAutoFillBackground(true);
         searchPanel->setMinimumWidth(240);
         auto searchLayout=new QVBoxLayout(searchPanel); searchLayout->setContentsMargins(8,8,8,8);
         auto searchHeader=new QHBoxLayout;
@@ -1088,6 +1093,24 @@ private:
     }
     void applyDarkMode(bool enabled) {
         QPalette palette=QApplication::style()->standardPalette();
+        // The system's standard palette can be dark even when our light mode is selected.
+        if(!enabled) {
+            for(auto group:{QPalette::Active,QPalette::Inactive,QPalette::Disabled}) {
+                for(auto role:{QPalette::Window,QPalette::Button,QPalette::AlternateBase}) palette.setColor(group,role,QColor("#f3f4f6"));
+                for(auto role:{QPalette::Base,QPalette::Light,QPalette::ToolTipBase}) palette.setColor(group,role,Qt::white);
+                for(auto role:{QPalette::WindowText,QPalette::Text,QPalette::ButtonText,QPalette::ToolTipText}) palette.setColor(group,role,QColor(group==QPalette::Disabled ? "#6b7280" : "#20252d"));
+                palette.setColor(group,QPalette::Midlight,QColor("#e5e7eb"));
+                palette.setColor(group,QPalette::Mid,QColor("#b8bec6"));
+                palette.setColor(group,QPalette::Dark,QColor("#788694"));
+                palette.setColor(group,QPalette::Shadow,QColor("#525b68"));
+                palette.setColor(group,QPalette::Highlight,QColor(group==QPalette::Disabled ? "#d5dce5" : "#356fbb"));
+                palette.setColor(group,QPalette::HighlightedText,group==QPalette::Disabled ? QColor("#525b68") : QColor(Qt::white));
+                palette.setColor(group,QPalette::PlaceholderText,QColor("#6b7280"));
+                palette.setColor(group,QPalette::Link,QColor("#245da8"));
+                palette.setColor(group,QPalette::LinkVisited,QColor("#7045a0"));
+                palette.setColor(group,QPalette::Accent,QColor("#356fbb"));
+            }
+        }
         if(enabled) {
             palette.setColor(QPalette::Window,QColor("#252b35")); palette.setColor(QPalette::WindowText,QColor("#e5e7eb")); palette.setColor(QPalette::Base,QColor("#191f28")); palette.setColor(QPalette::AlternateBase,QColor("#252b35")); palette.setColor(QPalette::Text,QColor("#e5e7eb")); palette.setColor(QPalette::Button,QColor("#303846")); palette.setColor(QPalette::ButtonText,QColor("#e5e7eb")); palette.setColor(QPalette::Highlight,QColor("#356fbb")); palette.setColor(QPalette::HighlightedText,Qt::white);
         }
@@ -1098,6 +1121,10 @@ private:
         }
         // Windows controls may use system text colors instead of the inherited palette.
         // Scope explicit colors to interface controls; PDF text retains its own color.
+        // Restore the palette before removing the dark stylesheet: otherwise Qt
+        // can retain the old application palette while unpolishing child widgets.
+        QApplication::setPalette(palette);
+        setPalette(palette);
         setStyleSheet(enabled ?
             "QLabel, QCheckBox, QRadioButton, QGroupBox, QTabBar { color: #e5e7eb; }"
             "QToolBar, QTabWidget::pane, QWidget#personalBookmarksPanel, QDialog { background-color: #252b35; color: #e5e7eb; }"
@@ -1124,7 +1151,7 @@ private:
             "QAbstractScrollArea::corner { background: #20252d; border: none; }"
             "QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled, QPushButton:disabled, QToolButton:disabled, QComboBox:disabled, QAbstractSpinBox:disabled, QMenu::item:disabled { color: #aeb8c7; }"
             : QString());
-        QApplication::setPalette(palette); setPalette(palette); scroll->setStyleSheet(enabled ? "QScrollArea { background: #20252d; border: 0; }" : "QScrollArea { background: #e9edf2; border: 0; }"); view->setDarkMode(enabled); updateToolbarLayout();
+        scroll->setStyleSheet(enabled ? "QScrollArea { background: #20252d; border: 0; }" : "QScrollArea { background: #e9edf2; border: 0; }"); view->setDarkMode(enabled); updateToolbarLayout();
         if(helpMenu) installFileMenu();
 #ifdef Q_OS_WIN
         if(QApplication::platformName()=="windows") {
@@ -1665,7 +1692,7 @@ private:
     std::atomic<int> searchGeneration{0};
     quint64 searchRevision=0;
     bool updatingView=false;
-    QFileDialog::Options fileDialogOptions() const { return view->darkMode ? QFileDialog::DontUseNativeDialog : QFileDialog::Options(); }
+    QFileDialog::Options fileDialogOptions() const { return QFileDialog::DontUseNativeDialog; }
     void error(QString value) { QMessageBox::warning(this,"GPDF",value); }
     QPointer<QMessageBox> importantWarningPopup;
     bool sessionSaveWarningShown=false;
@@ -1820,7 +1847,7 @@ private:
         documentOpened(path);
     }
     void open() {
-        auto path=QFileDialog::getOpenFileName(this,gpdfTr("Abrir PDF"),{},"PDF (*.pdf)");
+        auto path=QFileDialog::getOpenFileName(this,gpdfTr("Abrir PDF"),{},"PDF (*.pdf)",nullptr,fileDialogOptions());
         if(!path.isEmpty()) openPath(path);
     }
     bool writeTo(const QString& path) {
@@ -1937,7 +1964,7 @@ private:
             QDialog dialog(this); dialog.setObjectName("underlineFormatDialog"); dialog.setWindowTitle(gpdfTr("Editar subrayado")); auto form=new QFormLayout(&dialog);
             QColor color=pdf.annotationColor(row); auto choose=new QPushButton(gpdfTr("Elegir color…")); choose->setObjectName("underlineFormatColor"); form->addRow(gpdfTr("Color:"),choose);
             auto updateSwatch=[&]{ QPixmap swatch(16,16); swatch.fill(color); choose->setIcon(QIcon(swatch)); }; updateSwatch();
-            connect(choose,&QPushButton::clicked,&dialog,[&]{ auto next=QColorDialog::getColor(color,&dialog,gpdfTr("Color del subrayado")); if(next.isValid()) { color=next; updateSwatch(); } });
+            connect(choose,&QPushButton::clicked,&dialog,[&]{ auto next=QColorDialog::getColor(color,&dialog,gpdfTr("Color del subrayado"),QColorDialog::DontUseNativeDialog); if(next.isValid()) { color=next; updateSwatch(); } });
             auto width=new QDoubleSpinBox; width->setObjectName("underlineFormatWidth"); width->setRange(0.5,12); width->setSingleStep(0.5); width->setSuffix(" pt"); width->setValue(pdf.copyAnnotation(row).strokeWidth); form->addRow(gpdfTr("Grosor:"),width);
             auto buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); form->addRow(buttons); connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept); connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
             if(dialog.exec()==QDialog::Accepted) { if(!pdf.formatDrawing(row,color,width->value())) error(pdf.error()); else refresh(row); } return;
@@ -1955,7 +1982,7 @@ private:
         auto current=pdf.annotationColor(row);
         if(!current.isValid()) current=QColor("#ffd232");
         current.setAlpha(255);
-        auto color=QColorDialog::getColor(current,this,gpdfTr("Color de la anotación"),view->darkMode ? QColorDialog::DontUseNativeDialog : QColorDialog::ColorDialogOptions());
+        auto color=QColorDialog::getColor(current,this,gpdfTr("Color de la anotación"),QColorDialog::DontUseNativeDialog);
         if(!color.isValid()) return;
         if(!pdf.recolorAnnotation(row,color)) { error(pdf.error()); return; }
         refresh(row);
