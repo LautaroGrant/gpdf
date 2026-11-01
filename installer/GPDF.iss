@@ -25,7 +25,9 @@ AppName=GPDF
 AppVersion={#AppVersion}
 AppVerName=GPDF {#AppVersion}
 AppPublisher=Lautaro Grant
+; Keep the installation folder stable across releases; versions belong to package names.
 DefaultDirName={localappdata}\Programs\GPDF
+UsePreviousAppDir=yes
 DisableDirPage=no
 DefaultGroupName=GPDF
 DisableProgramGroupPage=yes

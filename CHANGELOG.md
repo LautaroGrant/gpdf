@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2 — November 1, 2026
+
+
+- Added persistent automatic, always-on and disabled OCR policies under View. Disabled mode remains silent but allows an explicit Apply OCR request. Existing selectable text is preserved.
+- Reorder open documents by dragging their tabs while preserving the active document and reading position.
+- Compact view-mode icons and minimalist Search and Annotations toolbar buttons; updated Text and Eraser icons.
+- Fixed blank pages caused by repeated scrollbar changes during width fitting in two-page view with Search open after OCR finishes.
+
+
 ## 0.3.1 - October 23, 2026
 
 - Increased definition of letters and words.

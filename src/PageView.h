@@ -4,6 +4,7 @@
 #include <QElapsedTimer>
 
 class PageView : public QWidget {
+    friend struct PageViewRenderTest;
 public:
     enum Tool { Select, Note, Text, Pen, Eraser };
     enum Mode { Continuous, Single, Double };
@@ -160,8 +161,9 @@ public:
         if(!qFuzzyCompare(previousScale,effectiveScale)) invalidateCache(-1,true);
         update();
     }
-    void setDarkMode(bool value) { darkMode=value; invalidateCache(); previewText(); update(); }
-    void setMode(Mode value) { mode=value; resetSelection(); invalidateCache(); rebuild(); update(); }
+    // Theme changes affect the surrounding canvas, not the PDF raster or pending renders.
+    void setDarkMode(bool value) { darkMode=value; previewText(); update(); }
+    void setMode(Mode value) { mode=value; resetSelection(); invalidateCache(-1,true); rebuild(); update(); }
     void setZoom(double value) { hideComment(); if(qFuzzyCompare(scale,value)) return; scale=value; invalidateCache(-1,true); rebuild(); update(); }
     void setFit(Fit value) { hideComment(); if(fit==value) return; fit=value; invalidateCache(-1,true); rebuild(); update(); }
     void setRotation(int value) { hideComment(); rotation=(value%4+4)%4; invalidateCache(); rebuild(); update(); }
@@ -186,14 +188,24 @@ public:
         double spreadWidth=0,spreadHeight=0;
         for(int i=start;i<end;++i) { auto size=displaySize(i); spreadWidth=mode==Double ? spreadWidth+size.width() : std::max(spreadWidth,size.width()); spreadHeight=std::max(spreadHeight,size.height()); }
         if(mode==Continuous) spreadHeight=displaySize(pdf.pageIndex()).height();
-        const double widthScale=std::max(0.01,(viewportWidth-(mode==Double ? 50.0 : 34.0))/spreadWidth);
+        // A width-fitted page can become short enough to hide the vertical bar,
+        // then grow tall enough to show it again. Reserve its possible gutter so
+        // fitting uses a stable width instead of endlessly toggling scrollbars.
+        int fittingWidth=viewportWidth;
+        if(auto viewport=parentWidget()) if(auto area=qobject_cast<QAbstractScrollArea*>(viewport->parentWidget())) {
+            int stableWidth=area->maximumViewportSize().width();
+            if(area->verticalScrollBarPolicy()==Qt::ScrollBarAsNeeded)
+                stableWidth-=area->verticalScrollBar()->sizeHint().width();
+            fittingWidth=std::max(1,std::min(fittingWidth,stableWidth));
+        }
+        const double widthScale=std::max(0.01,(fittingWidth-(mode==Double ? 50.0 : 34.0))/spreadWidth);
         const double pageScale=std::min(widthScale,std::max(0.01,(viewportHeight-34.0)/spreadHeight));
         if(fit==Width) effectiveScale=widthScale;
         else if(fit==Page || fit==Automatic) effectiveScale=(fit==Automatic && mode==Continuous) ? widthScale : pageScale;
         if(mode==Double) {
             double width=displaySize(start).width()+(start+1<end ? displaySize(start+1).width() : 0);
             // Leave two pixels for rounding each page's rendered dimensions.
-            if(fit==Manual) effectiveScale=std::min(scale,std::max(0.1,(viewportWidth-50.0)/width));
+            if(fit==Manual) effectiveScale=std::min(scale,std::max(0.1,(fittingWidth-50.0)/width));
         }
         double maxWidth=0;
         for(int i=start;i<end;++i) maxWidth=std::max(maxWidth,displaySize(i).width()*effectiveScale);
@@ -303,7 +315,11 @@ protected:
         if(!apiLock.owns_lock() && !renderRetryScheduled) {
             renderRetryScheduled=true; QTimer::singleShot(16,this,[this]{ renderRetryScheduled=false; update(); });
         }
-        QRect visible=visibleRegion().boundingRect(); int firstVisible=-1,lastVisible=-1;
+        // QWidget::visibleRegion() can be empty during exposure/style transitions
+        // and QWidget::grab(). Do not cancel a raster explicitly requested by this paint.
+        QRect visible=parentWidget() ? QRect(mapFrom(parentWidget(),QPoint()),parentWidget()->size()) : event->rect();
+        visible=visible.intersected(rect()).united(event->rect().intersected(rect()));
+        int firstVisible=-1,lastVisible=-1;
         const auto visibleRange=pageRange(visible.top(),visible.bottom());
         for(int page=visibleRange.first;page<visibleRange.second;++page) if(pageRects[page].intersects(visible)) { if(firstVisible<0) firstVisible=page; lastVisible=page; }
         visibleFirst=firstVisible; visibleLast=lastVisible;

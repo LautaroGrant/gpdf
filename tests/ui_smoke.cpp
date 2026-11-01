@@ -1,6 +1,11 @@
 #include "Window.h"
 #include "UiFont.h"
 #include <QTemporaryDir>
+#include <QTextBlock>
+#include <QPdfWriter>
+#include <QHelpEvent>
+#include <QToolTip>
+#include <QTextLayout>
 #include <QProcess>
 #include <QDir>
 #include <QElapsedTimer>
@@ -11,6 +16,31 @@
 #include <iostream>
 #include <thread>
 #include <stdexcept>
+
+struct PageViewRenderTest {
+    static int generation(const PageView* view) { return view->cacheGeneration; }
+    static void dump(PageView* view) {
+        const int page=view->pdf.pageIndex(); const QImage* cached=view->cache.object(page);
+        int ink=0; if(cached) for(int y=0;y<cached->height();++y) for(int x=0;x<cached->width();++x) if(cached->pixelColor(x,y).lightness()<100) ++ink;
+        std::cout<<"CACHE page="<<page<<" cached="<<bool(cached)<<" ink="<<ink<<" pending="<<view->pendingRenders.contains(page)<<" stale="<<view->stalePages.contains(page)
+                 <<" visible="<<view->visibleFirst<<","<<view->visibleLast<<" generation="<<view->cacheGeneration<<" workers="<<view->workers.activeThreadCount()<<"\n"<<std::flush;
+    }
+};
+
+// Limit recursion so a regression reports failure instead of hanging the test.
+struct ViewportResizeProbe : QObject {
+    PageView* view;
+    int count=0;
+    bool runaway=false;
+    explicit ViewportResizeProbe(PageView* target):view(target) {}
+    bool eventFilter(QObject* object,QEvent* event) override {
+        if(event->type()==QEvent::Resize) {
+            if(++count>200) runaway=true;
+            else view->setViewportSize(static_cast<QWidget*>(object)->size());
+        }
+        return false;
+    }
+};
 
 #ifdef Q_OS_WIN
 class FullscreenFrameWatch : public QAbstractNativeEventFilter {
@@ -72,6 +102,125 @@ int main(int argc,char** argv) {
             std::cout<<"PASS: "<<checked<<" real PDF word/line click checks across "<<document.pageCount()<<" pages and four rotations.\n";
             return 0;
         }
+        if(app.arguments().size()==4 && app.arguments()[1]=="--spread-render-probe") {
+            QTemporaryDir settingsDirectory;
+            QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settingsDirectory.path());
+            Window reader; reader.show(); reader.activateWindow();
+            reader.openDocument(app.arguments()[2]);
+            PageView* canvas=nullptr;
+            for(auto widget:reader.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) canvas=page;
+            require(canvas && canvas->pdf.loaded(),"spread probe opens requested PDF");
+            auto mode=reader.findChild<QComboBox*>("viewMode");
+            auto search=reader.findChild<QAction*>("searchAction");
+            auto annotations=reader.findChild<QAction*>("toggleAnnotations");
+            const auto output=app.arguments()[3]; QDir().mkpath(output);
+            auto ocr=reader.findChild<QAction*>("ocrDocumentAction");
+            QElapsedTimer ocrReady; ocrReady.start();
+            while(!ocr->isEnabled() && ocrReady.elapsed()<2500) app.processEvents(QEventLoop::AllEvents,20);
+            std::cout<<"OCR available="<<ocr->isEnabled()<<"\n";
+            if(ocr->isEnabled()) ocr->trigger();
+            reader.findChild<QSpinBox*>("pageNumber")->setValue(std::min(17,canvas->pdf.pageCount()));
+            for(bool night:{false,true}) for(bool openAfter:{false,true}) for(int width:{1280,960,800}) for(bool bothPanels:{false,true}) {
+                if(canvas->darkMode!=night) reader.findChild<QAction*>("darkModeAction")->trigger();
+                reader.resize(width,850); search->setChecked(false); annotations->setChecked(bothPanels);
+                mode->setCurrentIndex(0); app.processEvents();
+                if(!openAfter) search->setChecked(true);
+                mode->setCurrentIndex(2);
+                if(openAfter) search->setChecked(true);
+                const int first=canvas->pdf.pageIndex()/2*2;
+                auto ink=[&](int page) {
+                    auto bounds=canvas->pageRects[page].toAlignedRect().intersected(canvas->visibleRegion().boundingRect());
+                    if(bounds.isEmpty()) return 0;
+                    auto pixels=canvas->grab(bounds).toImage(); int count=0;
+                    for(int y=4;y<pixels.height()-4;++y) for(int x=4;x<pixels.width()-4;++x)
+                        if(pixels.pixelColor(x,y).lightness()<150) ++count;
+                    return count;
+                };
+                QElapsedTimer deadline; deadline.start();
+                int left=0,right=0;
+                do { app.processEvents(QEventLoop::AllEvents,20); left=ink(first); right=ink(first+1); } while((left<100 || right<100) && deadline.elapsed()<5000);
+                const auto name=QString("spread-%1-%2-night%3-after%4").arg(width).arg(bothPanels).arg(night).arg(openAfter);
+                require(reader.grab().save(output+"/"+name+".png"),"save spread rendering evidence");
+                std::cout<<name.toStdString()<<" left="<<left<<" right="<<right<<" scale="<<canvas->effectiveScale<<" viewport="<<reader.findChild<QScrollArea*>()->viewport()->width()<<"\n";
+                require(left>=100 && right>=100,"both pages retain rendered text with search panel open");
+            }
+            reader.resize(1280,850); annotations->setChecked(false); search->setChecked(true); mode->setCurrentIndex(2);
+            app.processEvents();
+            reader.findChild<QAction*>("darkModeAction")->setShortcut(QKeySequence("F9"));
+            reader.activateWindow(); app.processEvents();
+            canvas->setFocus();
+            for(int burst=0;burst<4;++burst) {
+                for(int toggle=0;toggle<21;++toggle) {
+                    const bool wasDark=canvas->darkMode;
+                    auto receiver=QApplication::focusWidget(); if(!receiver) receiver=canvas;
+                    QKeyEvent key(QEvent::KeyPress,Qt::Key_F9,Qt::NoModifier);
+                    QApplication::sendEvent(receiver,&key);
+                    require(canvas->darkMode!=wasDark,"F9 switches the theme during rapid switching probe");
+                    if(toggle%2) app.processEvents(QEventLoop::AllEvents,1);
+                }
+                QElapsedTimer deadline; deadline.start();
+                while(deadline.elapsed()<1500) app.processEvents(QEventLoop::AllEvents,20);
+                auto screenshot=reader.grab();
+                require(screenshot.save(output+QString("/rapid-f9-%1.png").arg(burst)),"save rapid theme switching evidence");
+                for(int page=canvas->pdf.pageIndex()/2*2;page<std::min(canvas->pdf.pageCount(),canvas->pdf.pageIndex()/2*2+2);++page) {
+                    auto image=canvas->grab(canvas->pageRects[page].toAlignedRect()).toImage(); int ink=0;
+                    for(int y=8;y<image.height()-8;++y) for(int x=8;x<image.width()-8;++x) if(image.pixelColor(x,y).lightness()<150) ++ink;
+                    std::cout<<"F9 burst="<<burst<<" night="<<canvas->darkMode<<" page="<<page<<" ink="<<ink<<"\n";
+                    require(ink>100,"rapid F9 theme switching keeps page text visible with search open");
+                }
+            }
+            if(!canvas->darkMode) reader.findChild<QAction*>("darkModeAction")->trigger();
+            search->setChecked(true); annotations->setChecked(false); reader.resize(1280,850); mode->setCurrentIndex(2);
+            reader.findChild<QSpinBox*>("pageNumber")->setValue(17);
+            for(int spread=16;spread<std::min(40,canvas->pdf.pageCount()-1);spread+=2) {
+                require(canvas->pdf.pageIndex()==spread,"forward spread navigation reaches requested page");
+                QElapsedTimer deadline; deadline.start();
+                int left=0,right=0;
+                auto countInk=[&](int page) {
+                    auto image=canvas->grab(canvas->pageRects[page].toAlignedRect()).toImage(); int ink=0;
+                    for(int y=8;y<image.height()-8;++y) for(int x=8;x<image.width()-8;++x) if(image.pixelColor(x,y).lightness()<150) ++ink;
+                    return ink;
+                };
+                do { app.processEvents(QEventLoop::AllEvents,20); left=countInk(spread); right=countInk(spread+1); } while((left<100 || right<100) && deadline.elapsed()<5000);
+                const auto name=QString("forward-pages-%1-%2").arg(spread+1).arg(spread+2);
+                reader.grab().save(output+"/"+name+".png");
+                std::cout<<name.toStdString()<<" left="<<left<<" right="<<right<<"\n";
+                require(left>100 && right>100,"night search OCR navigation from page 17 keeps both pages visible");
+                reader.findChild<QAction*>("goNext")->trigger();
+            }
+            auto query=reader.findChild<QLineEdit*>("searchInput");
+            auto results=reader.findChild<QListWidget*>("searchResults");
+            auto status=reader.findChild<QLabel*>("searchStatus");
+            query->setText("fantasia"); QMetaObject::invokeMethod(query,"returnPressed");
+            QElapsedTimer searchWait; searchWait.start();
+            while(!status->text().contains("resultados en") && searchWait.elapsed()<90000) app.processEvents(QEventLoop::AllEvents,20);
+            std::cout<<"Search after OCR: "<<status->text().toStdString()<<" rows="<<results->count()<<"\n"<<std::flush;
+            require(results->count()>0 && status->text().contains("resultados en"),"complete full-book fantasia search after OCR");
+            for(int row=0;row<results->count();++row) {
+                results->setCurrentRow(row);
+                const int spread=canvas->pdf.pageIndex()/2*2;
+                QElapsedTimer settle; settle.start();
+                while(settle.elapsed()<700) app.processEvents(QEventLoop::AllEvents,20);
+                int ink=0; QElapsedTimer rasterWait; rasterWait.start();
+                do {
+                    app.processEvents(QEventLoop::AllEvents,20);
+                    auto image=canvas->grab(canvas->pageRects[canvas->pdf.pageIndex()].toAlignedRect()).toImage(); ink=0;
+                    for(int y=8;y<image.height()-8;++y) for(int x=8;x<image.width()-8;++x) if(image.pixelColor(x,y).lightness()<100) ++ink;
+                } while(ink<100 && rasterWait.elapsed()<5000);
+                reader.grab().save(output+QString("/fantasia-result-%1-page-%2.png").arg(row).arg(canvas->pdf.pageIndex()+1));
+                std::cout<<"Search result="<<row<<" page="<<canvas->pdf.pageIndex()+1<<" ink="<<ink<<"\n"<<std::flush;
+                if(ink<=100) {
+                    PageViewRenderTest::dump(canvas);
+                    auto direct=canvas->pdf.renderPage(canvas->pdf.pageIndex(),1.0);
+                    int directInk=0; for(int y=0;y<direct.height();++y) for(int x=0;x<direct.width();++x) if(direct.pixelColor(x,y).lightness()<100) ++directInk;
+                    direct.save(output+"/direct-after-search.png");
+                    std::cout<<"DIRECT ink="<<directInk<<" null="<<direct.isNull()<<" visible="<<canvas->visibleRegion().boundingRect().width()<<","<<canvas->visibleRegion().boundingRect().height()<<" rect="<<canvas->activeRect().width()<<","<<canvas->activeRect().height()<<"\n"<<std::flush;
+                }
+                require(ink>100,"search-result navigation retains rendered page text after full-book search");
+            }
+            std::cout<<"PASS: real PDF two-page rendering with search and annotation panels at three window widths.\n";
+            return 0;
+        }
         if(app.arguments().size()==3 && app.arguments()[1]=="--theme-panels-probe") {
             QTemporaryDir settingsDirectory;
             QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settingsDirectory.path());
@@ -125,6 +274,38 @@ int main(int argc,char** argv) {
         require(client.state()==QProcess::NotRunning && client.exitCode()==0 && delivered==expected,"secondary process forwards Unicode document paths");
         QTemporaryDir directory;
         QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,directory.path());
+        // At this boundary, fitting without a vertical scrollbar overflows by a
+        // few pixels, while fitting with it fits. Geometry must reach a fixed point.
+        for(int extent:{14,17}) for(int variant:{0,1,2}) {
+            PdfDocument sample;
+            const bool continuous=variant==2;
+            require(sample.createSample(continuous ? 1 : 2),"scrollbar threshold fixture");
+            QScrollArea area; area.setFrameShape(QFrame::NoFrame); area.setAlignment(Qt::AlignHCenter);
+            area.setStyleSheet(QString("QScrollArea { border: 0; } QScrollBar:vertical { width: %1px; } QScrollBar:horizontal { height: %1px; }").arg(extent));
+            auto canvas=new PageView(sample); canvas->newDocument(); canvas->scale=1.75;
+            canvas->setMode(continuous ? PageView::Continuous : PageView::Double);
+            if(variant!=0) canvas->setFit(PageView::Width);
+            area.setWidget(canvas);
+            ViewportResizeProbe probe(canvas); area.viewport()->installEventFilter(&probe);
+            const int width=continuous ? 700 : 1000,margin=continuous ? 36 : 32;
+            const double spreadWidth=sample.pageSize().width()*(continuous ? 1 : 2);
+            const double usable=width-(continuous ? 34 : 50);
+            const int tall=qRound(sample.pageSize().height()*usable/spreadWidth)+margin;
+            const int shortHeight=qRound(sample.pageSize().height()*(usable-extent)/spreadWidth)+margin;
+            area.resize(width,(tall+shortHeight)/2); area.show();
+            canvas->setViewportSize(area.viewport()->size());
+            QElapsedTimer settle; settle.start();
+            while(settle.elapsed()<100 && !probe.runaway) { app.processEvents(QEventLoop::AllEvents,10); QThread::msleep(1); }
+            require(!probe.runaway && probe.count<20,"width fitting reaches stable geometry at scrollbar appearance threshold");
+            const int settledGeneration=PageViewRenderTest::generation(canvas),settledCount=probe.count;
+            settle.restart(); while(settle.elapsed()<80) { app.processEvents(QEventLoop::AllEvents,10); QThread::msleep(1); }
+            require(PageViewRenderTest::generation(canvas)==settledGeneration && probe.count==settledCount,"idle fitting does not continuously invalidate pending rasters");
+            require(area.horizontalScrollBar()->maximum()==0,"width fitting avoids a secondary horizontal scrollbar loop");
+            for(int pass=0;pass<3;++pass) { canvas->grab(); app.processEvents(); canvas->workers.waitForDone(); app.processEvents(); }
+            auto pixels=canvas->grab(canvas->activeRect().toAlignedRect()).toImage(); int ink=0;
+            for(int y=0;y<pixels.height();++y) for(int x=0;x<pixels.width();++x) if(pixels.pixelColor(x,y).lightness()<100) ++ink;
+            require(ink>100,"stable scrollbar fitting finishes rendering visible page text");
+        }
         QString fixture=directory.path()+"/ui.pdf";
         QString output=argc>1 ? QString::fromLocal8Bit(argv[1]) : QString();
         if(!output.isEmpty()) QDir().mkpath(output);
@@ -136,6 +317,67 @@ int main(int argc,char** argv) {
             require(pdf.saveCopy(fixture),"save fixture");
             if(!output.isEmpty()) require(pdf.saveCopy(output+"/views-sample.pdf"),"save view demonstration");
         }
+        {
+            QTemporaryDir policySettings;
+            QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,policySettings.path());
+            const QString scanned=directory.path()+"/ocr-policy-scanned.pdf";
+            {
+                QPdfWriter writer(scanned); writer.setResolution(72);
+                QImage image(320,180,QImage::Format_RGB32); image.fill(Qt::white);
+                QPainter ink(&image); ink.setPen(Qt::black); ink.drawText(image.rect(),Qt::AlignCenter,"Scanned OCR policy test"); ink.end();
+                QPainter painter(&writer);
+                for(int i=0;i<16;++i) { if(i) writer.newPage(); painter.drawImage(QRect(30,30,320,180),image); }
+            }
+            Window reader; reader.show();
+            auto timer=reader.findChild<QTimer*>("ocrTimer"); timer->stop();
+            auto tick=[&]{ QMetaObject::invokeMethod(timer,"timeout",Qt::DirectConnection); };
+            auto automatic=reader.findChild<QAction*>("ocrPolicy0");
+            auto always=reader.findChild<QAction*>("ocrPolicy1");
+            auto disabled=reader.findChild<QAction*>("ocrPolicy2");
+            auto bar=reader.findChild<QToolBar*>("ocrToolbar");
+            auto apply=reader.findChild<QAction*>("ocrDocumentAction");
+            require(automatic && always && disabled && automatic->isChecked(),"OCR defaults to automatic with exclusive policy choices");
+            reader.openDocument(scanned); tick();
+            require(!bar->isHidden() && apply->isEnabled(),"automatic OCR offers scanned large document without starting it");
+            disabled->trigger(); tick();
+            require(disabled->isChecked() && !automatic->isChecked() && bar->isHidden() && apply->isEnabled(),"disabled OCR hides offers but permits explicit manual OCR");
+            reader.openDocument(fixture); reader.openDocument(scanned); tick();
+            require(bar->isHidden(),"disabled OCR stays silent for newly opened documents");
+            apply->trigger(); tick();
+            require(!bar->isHidden() && !apply->isEnabled() && disabled->isChecked()
+                    && reader.findChild<QLabel*>("ocrMessage")->text().contains("Aplicando OCR"),"manual OCR runs while the disabled policy remains selected");
+            reader.findChild<QPushButton*>("ocrCancel")->click(); tick();
+            require(bar->isHidden() && apply->isEnabled(),"cancelling manual OCR returns disabled mode to silence");
+            always->trigger(); tick();
+            require(always->isChecked() && !disabled->isChecked() && !bar->isHidden() && !apply->isEnabled()
+                    && reader.findChild<QLabel*>("ocrMessage")->text().contains("Aplicando OCR"),"always OCR starts large scanned document without confirmation");
+            disabled->trigger(); tick();
+            require(bar->isHidden(),"disabling OCR cancels running recognition and suppresses late notifications");
+            {
+                Window restored; restored.findChild<QTimer*>("ocrTimer")->stop();
+                require(restored.findChild<QAction*>("ocrPolicy2")->isChecked(),"OCR policy persists across windows");
+                restored.openDocument(scanned);
+                QMetaObject::invokeMethod(restored.findChild<QTimer*>("ocrTimer"),"timeout",Qt::DirectConnection);
+                require(restored.findChild<QToolBar*>("ocrToolbar")->isHidden(),"persisted disabled mode opens scans silently");
+            }
+            automatic->trigger(); tick();
+            require(!bar->isHidden() && apply->isEnabled(),"restoring automatic OCR offers the scan again");
+            reader.openDocument(fixture); always->trigger();
+            for(int i=0;i<20;++i) tick();
+            require(bar->isHidden(),"always OCR retains native text without unnecessary recognition");
+            automatic->trigger();
+            auto controls=reader.findChild<QToolBar*>("centerTools");
+            QList<QWidget*> targets={reader.findChild<QSpinBox*>("pageNumber"),reader.findChild<QSpinBox*>("zoomPercent"),
+                reader.findChild<QListWidget*>("annotationList")->viewport(),reader.findChild<QListWidget*>("searchResults")->viewport()};
+            for(auto action:controls->actions()) if(action->text()=="‹" || action->text()=="›" || action->text()=="−" || action->text()=="+") targets.append(controls->widgetForAction(action));
+            for(auto target:targets) {
+                require(target,"hover help target exists");
+                QHelpEvent help(QEvent::ToolTip,QPoint(2,2),target->mapToGlobal(QPoint(2,2)));
+                QToolTip::hideText(); QApplication::sendEvent(target,&help);
+                require(!QToolTip::isVisible(),"page zoom search and annotation controls suppress hover help");
+            }
+        }
+        QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,directory.path());
         { QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.setValue("shortcuts/highlightAction","Ctrl+H"); settings.setValue("shortcuts/saveFileAction","Ctrl+S"); settings.setValue("shortcuts/saveAsFileAction","Ctrl+Shift+S"); settings.setValue("shortcuts/goPage","Ctrl+G"); settings.setValue("shortcuts/editSelectedAnnotationAction","F2"); }
         {
             Window emptyWindow;
@@ -806,6 +1048,51 @@ int main(int argc,char** argv) {
         require(view->pdf.pageIndex()==0 && results->currentRow()==0,"Enter wraps after last result");
         results->setCurrentRow(1); next->trigger(); QMetaObject::invokeMethod(searchInput,"returnPressed");
         require(view->pdf.pageIndex()==2 && results->currentRow()==2,"Enter follows current document location");
+        // Search navigation reserves both shortcut dispatch and key handling, even with conflicting custom bindings.
+        auto savedRotationShortcut=rotate->shortcut();
+        auto savedSearchShortcut=window.findChild<QAction*>("searchEnterAction")->shortcut();
+        window.findChild<QAction*>("searchEnterAction")->setShortcut(QKeySequence("Alt+Return"));
+        window.activateWindow(); app.processEvents();
+        for(QWidget* target : QList<QWidget*>{searchInput,results}) {
+            target->setFocus(); app.processEvents();
+            require(QApplication::focusWidget()==target,"search navigation test focuses its intended control");
+            for(auto key : {Qt::Key_Down,Qt::Key_Up,Qt::Key_Return,Qt::Key_Enter}) {
+                for(auto modifiers : {Qt::NoModifier,Qt::ShiftModifier}) {
+                    if((key==Qt::Key_Up || key==Qt::Key_Down) && modifiers!=Qt::NoModifier) continue;
+                    results->setCurrentRow(2);
+                    const int beforeRotation=view->rotation;
+                    rotate->setShortcut(QKeySequence(QKeyCombination(modifiers,key)));
+                    QKeyEvent reserve(QEvent::ShortcutOverride,key,modifiers);
+                    QApplication::sendEvent(target,&reserve);
+                    require(reserve.isAccepted(),"search navigation overrides conflicting customized shortcuts");
+                    QKeyEvent navigate(QEvent::KeyPress,key,modifiers);
+                    QApplication::sendEvent(target,&navigate);
+                    const int expected=(key==Qt::Key_Up || modifiers==Qt::ShiftModifier) ? 1 : 3;
+                    if(results->currentRow()!=expected || view->pdf.pageIndex()!=expected) throw std::runtime_error(QString("search navigation: target=%1 key=%2 modifiers=%3 expected=%4 row=%5 page=%6 focus=%7").arg(target->objectName()).arg(int(key)).arg(int(modifiers)).arg(expected).arg(results->currentRow()).arg(view->pdf.pageIndex()).arg(QApplication::focusWidget() ? QApplication::focusWidget()->objectName() : "none").toStdString());
+                    require(view->rotation==beforeRotation,"search navigation does not trigger conflicting custom action");
+                }
+            }
+            results->setCurrentRow(0);
+            QKeyEvent previousResult(QEvent::KeyPress,Qt::Key_Return,Qt::ShiftModifier);
+            QApplication::sendEvent(target,&previousResult);
+            require(results->currentRow()==4,"Shift Enter wraps to final search result");
+        }
+        rotate->setShortcut(savedRotationShortcut);
+        window.findChild<QAction*>("searchEnterAction")->setShortcut(savedSearchShortcut);
+        for(int i=0;i<mode->count();++i) require(!mode->itemIcon(i).isNull(),"each view mode has an icon");
+        require(mode->width()==46 && mode->currentText()==mode->toolTip(),"compact view mode retains descriptive tooltip");
+        for(int index:{1,2,0}) {
+            mode->setFocus(); mode->setCurrentIndex(index); app.processEvents();
+            require(QApplication::focusWidget()==view,"changing view returns keyboard focus to document");
+        }
+        mode->showPopup(); app.processEvents();
+        auto popupViewport=mode->view()->viewport();
+        auto choice=mode->view()->visualRect(mode->model()->index(2,0)).center();
+        QMouseEvent chooseDown(QEvent::MouseButtonPress,choice,popupViewport->mapToGlobal(choice),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        QMouseEvent chooseUp(QEvent::MouseButtonRelease,choice,popupViewport->mapToGlobal(choice),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        QApplication::sendEvent(popupViewport,&chooseDown); QApplication::sendEvent(popupViewport,&chooseUp); app.processEvents();
+        require(mode->currentIndex()==2 && QApplication::focusWidget()==view,"popup view selection restores document focus after popup closes");
+        mode->setCurrentIndex(0);
         bool previewRendered=false;
         QTimer::singleShot(100,[&]{
             for(auto widget:QApplication::topLevelWidgets()) if(auto dialog=qobject_cast<QPrintPreviewDialog*>(widget)) {
@@ -831,6 +1118,14 @@ int main(int argc,char** argv) {
         require(view->pdf.note({100,650},"Cambio sin guardar"),"first document pending change");
         window.openDocument(second); app.processEvents();
         require(tabs->count()==2 && !tabsToolbar->isHidden() && view->pdf.pageCount()==2,"two documents show tabs");
+        require(tabs->isMovable(),"document tabs allow dragging");
+        tabs->moveTab(1,0); app.processEvents();
+        require(tabs->currentIndex()==0 && view->pdf.pageCount()==2,"moving active tab preserves active PDF");
+        tabs->setCurrentIndex(1); app.processEvents();
+        require(view->pdf.pageCount()==5 && view->pdf.pageIndex()==2 && view->pdf.dirty(),"reordered tab restores original dirty document");
+        tabs->moveTab(0,1); app.processEvents();
+        require(tabs->currentIndex()==0 && view->pdf.pageCount()==5,"moving inactive tab preserves active PDF");
+        window.openDocument(second);
         auto originalTabText=tabs->tabText(1);
         tabs->setTabText(1,QString(180,'W')+".pdf"); app.processEvents();
         require(tabs->tabRect(1).width()<=240 && tabs->elideMode()==Qt::ElideRight,"long document tabs have bounded width and ellipsis");
@@ -960,6 +1255,20 @@ int main(int argc,char** argv) {
         });
         auto letterComment=studyMultilineText(&window,"Comentario con atajo",{},&letterCommentAccepted);
         require(letterCommentAccepted && letterComment=="r","comment text survives single letter shortcut");
+        {
+            const QString longComment=QString("Comentario largo sin saltos automáticos. ").repeated(12)+QString(180,'W')+"\nSalto manual conservado.";
+            GpdfCommentDialog dialog(&window,"Ajuste visual del comentario",longComment);
+            dialog.resize(360,240); dialog.show(); app.processEvents();
+            auto editor=dialog.findChild<QPlainTextEdit*>();
+            require(editor && editor->document()->firstBlock().layout()->lineCount()>1,"long comments wrap visually at editor width");
+            require(editor->horizontalScrollBar()->maximum()==0,"long words wrap without horizontal scrolling");
+            require(editor->toPlainText()==longComment && dialog.textValue()==longComment && editor->document()->blockCount()==2,"visual wrapping preserves exact text and manual paragraph break");
+            const int narrowLines=editor->document()->firstBlock().layout()->lineCount();
+            dialog.resize(700,240); app.processEvents();
+            require(editor->document()->firstBlock().layout()->lineCount()<narrowLines && dialog.textValue()==longComment,"comment wrapping adapts to resized editor without changing text");
+            if(!output.isEmpty()) dialog.grab().save(output+"/comment-word-wrap.png");
+            dialog.close();
+        }
         rotate->setShortcut(QKeySequence("Ctrl+R"));
         require(window.findChild<QAction*>("selectAllAction")->shortcut()==QKeySequence("Ctrl+Shift+A"),"select all shortcut changed");
         QKeyEvent annotationsKey(QEvent::KeyPress,Qt::Key_N,Qt::ControlModifier); bool visible=window.findChild<QAction*>("toggleAnnotations")->isChecked(); QApplication::sendEvent(view,&annotationsKey);
@@ -1264,6 +1573,21 @@ int main(int argc,char** argv) {
             selectionWindow.findChild<QComboBox*>("viewMode")->setCurrentIndex(2); settle();
             auto contentPixels=[&]{ auto image=canvas->grab(canvas->pageRects[0].toAlignedRect()).toImage(); int dark=0; for(int y=0;y<image.height();++y) for(int x=0;x<image.width();++x) if(image.pixelColor(x,y).lightness()<100) ++dark; return dark; };
             require(contentPixels()>100,"double page baseline rendering ready");
+            selectionWindow.hide();
+            canvas->newDocument(); canvas->setMode(PageView::Double);
+            for(int pass=0;pass<6;++pass) { contentPixels(); app.processEvents(); canvas->workers.waitForDone(); app.processEvents(); }
+            require(contentPixels()>100,"requested page rasters survive empty widget visibility during exposure transitions");
+            selectionWindow.show(); settle();
+            // A theme switch must not depend on a replacement raster arriving later.
+            for(int toggle=0;toggle<20;++toggle) {
+                canvas->setDarkMode(!canvas->darkMode);
+                require(contentPixels()>100,"rapid theme switching retains PDF text without waiting for background renders");
+            }
+            // No event processing: replacement rasters cannot have reached the UI yet.
+            canvas->setMode(PageView::Single);
+            require(contentPixels()>100,"switch to single view keeps existing page visible before rendering completes");
+            canvas->setMode(PageView::Double);
+            require(contentPixels()>100,"switch to double view keeps existing page visible before rendering completes");
             canvas->setViewportSize(QSize(780,650));
             require(contentPixels()>100,"viewport resize retains page preview in double view");
             for(double scale:{1.4,1.6,1.8,1.3}) { canvas->setZoom(scale); require(contentPixels()>100,"rapid zoom retains visible page content"); }

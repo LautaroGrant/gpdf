@@ -61,6 +61,8 @@
 #include <QGridLayout>
 #include <QSignalBlocker>
 #include <QComboBox>
+#include <QStylePainter>
+#include <QStyleOptionComboBox>
 #include <QSpinBox>
 #include <QFontComboBox>
 #include <QTextEdit>
@@ -182,11 +184,11 @@ private:
 // Shared vector geometry for the toolbar icon and the page cursor (24-unit grid).
 inline void drawGpdfEraser(QPainter& painter) {
     QPainterPath body;
-    body.moveTo(3,14); body.lineTo(13,4); body.quadTo(15,2,17,4);
-    body.lineTo(21,8); body.quadTo(23,10,21,12);
-    body.lineTo(12,21); body.lineTo(8,21); body.closeSubpath();
+    body.moveTo(3,14); body.lineTo(13,4); body.lineTo(21,12);
+    body.lineTo(12,21); body.lineTo(9,21); body.closeSubpath();
     painter.drawPath(body);
-    painter.drawLine(QPointF(8,9),QPointF(16.5,16.5));
+    painter.drawLine(QPointF(9,8),QPointF(17,16));
+    painter.drawLine(QPointF(12,21),QPointF(21,21));
 }
 
 inline QCursor gpdfEraserCursor(qreal devicePixelRatio) {
@@ -203,7 +205,7 @@ inline QCursor gpdfEraserCursor(qreal devicePixelRatio) {
         painter.setBrush(Qt::white); drawGpdfEraser(painter);
         painter.setPen(QPen(QColor("#20252d"),1.7,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
         drawGpdfEraser(painter); painter.end();
-        cursor=QCursor(image,11,28);
+        cursor=QCursor(image,12,28);
     }
     return cursor;
 }
@@ -226,6 +228,23 @@ public:
         QColor color=QApplication::palette().color(mode==QIcon::Disabled ? QPalette::Disabled : QPalette::Active,QPalette::ButtonText);
         painter->setPen(QPen(color,1.7,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin)); painter->setBrush(Qt::NoBrush);
         QPainterPath path;
+        if(tool>=10 && tool<=12) {
+            auto page=[&](QRectF bounds){ painter->drawRoundedRect(bounds,1.2,1.2); };
+            if(tool==10) { page(QRectF(6,2,12,7)); page(QRectF(6,12,12,10)); }
+            else if(tool==11) page(QRectF(5,2,14,20));
+            else { page(QRectF(2,4,9,16)); page(QRectF(13,4,9,16)); }
+            painter->restore(); return;
+        }
+        if(tool==8 || tool==9) {
+            if(tool==8) {
+                painter->drawEllipse(QRectF(4,4,12,12));
+                painter->drawLine(QPointF(14.5,14.5),QPointF(21,21));
+            } else {
+                painter->drawRoundedRect(QRectF(5,3,14,18),2,2);
+                for(int y:{8,12,16}) painter->drawLine(QPointF(9,y),QPointF(15,y));
+            }
+            painter->restore(); return;
+        }
         if(tool==7) { drawGpdfEraser(*painter); painter->restore(); return; }
         if(tool==6) {
             // Keep the arc in place; open the arrowhead inward like the reference.
@@ -237,7 +256,13 @@ public:
         }
         if(tool==0) { path.moveTo(5,3); path.lineTo(5,19); path.lineTo(9,15); path.lineTo(12,21); path.lineTo(15,19.5); path.lineTo(12,13.5); path.lineTo(18,13.5); path.closeSubpath(); painter->drawPath(path); }
         else if(tool==1) { path.moveTo(5,4); path.lineTo(19,4); path.quadTo(21,4,21,6); path.lineTo(21,15); path.quadTo(21,17,19,17); path.lineTo(10,17); path.lineTo(5,21); path.lineTo(5,17); path.quadTo(3,17,3,15); path.lineTo(3,6); path.quadTo(3,4,5,4); painter->drawPath(path); painter->drawLine(QPointF(7,8),QPointF(17,8)); painter->drawLine(QPointF(7,12),QPointF(14,12)); }
-        else if(tool==2) { painter->drawLine(QPointF(5,5),QPointF(19,5)); painter->drawLine(QPointF(12,5),QPointF(12,20)); painter->drawLine(QPointF(8,20),QPointF(16,20)); }
+        else if(tool==2) {
+            for(auto corner : {QPolygonF{{7,3},{3,3},{3,7}},QPolygonF{{17,3},{21,3},{21,7}},
+                               QPolygonF{{3,17},{3,21},{7,21}},QPolygonF{{17,21},{21,21},{21,17}}}) painter->drawPolyline(corner);
+            painter->drawLine(QPointF(8,8),QPointF(16,8));
+            painter->drawLine(QPointF(12,8),QPointF(12,17));
+            painter->drawLine(QPointF(10,17),QPointF(14,17));
+        }
         else if(tool==3) { path.moveTo(4,16); path.lineTo(15,5); path.quadTo(17,3,19,5); path.quadTo(21,7,19,9); path.lineTo(8,20); path.lineTo(3,21); path.closeSubpath(); painter->drawPath(path); painter->drawLine(QPointF(13,7),QPointF(17,11)); painter->drawLine(QPointF(4,16),QPointF(8,20)); }
         else if(tool==5) { painter->drawLine(QPointF(6,4),QPointF(6,13)); painter->drawLine(QPointF(18,4),QPointF(18,13)); path.moveTo(6,13); path.cubicTo(6,21,18,21,18,13); painter->drawPath(path); }
         else { path.moveTo(7,15); path.lineTo(15,4); path.lineTo(21,9); path.lineTo(13,19); path.closeSubpath(); painter->drawPath(path); painter->drawLine(QPointF(6,16),QPointF(3,20)); painter->drawLine(QPointF(3,20),QPointF(9,20)); painter->drawLine(QPointF(9,20),QPointF(11,18)); }
@@ -251,6 +276,10 @@ public:
     explicit GpdfCommentDialog(QWidget* parent,const QString& title,const QString& contents):QInputDialog(parent) {
         setWindowTitle(title); setLabelText(gpdfTr("Texto (Enter para guardar, Shift+Enter para nueva línea):"));
         setOption(QInputDialog::UsePlainTextEditForTextInput); setInputMode(QInputDialog::TextInput); setTextValue(contents);
+        if(auto input=findChild<QPlainTextEdit*>()) {
+            input->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+            input->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        }
         qApp->installEventFilter(this);
     }
     ~GpdfCommentDialog() override { qApp->removeEventFilter(this); }
@@ -308,6 +337,19 @@ public:
         popup->resize(popup->width(),std::min(popup->height(),std::max(1,available.bottom()-position.y()+1)));
         popup->move(position);
     }
+};
+
+// Keep descriptive choices in the popup and accessibility tree; show only the icon on the toolbar.
+class IconViewModeCombo : public ViewModeCombo {
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QStylePainter painter(this); QStyleOptionComboBox option; initStyleOption(&option);
+        option.currentText.clear();
+        painter.drawComplexControl(QStyle::CC_ComboBox,option);
+        painter.drawControl(QStyle::CE_ComboBoxLabel,option);
+    }
+public:
+    using ViewModeCombo::ViewModeCombo;
 };
 
 class TextResizeGrip : public QWidget {

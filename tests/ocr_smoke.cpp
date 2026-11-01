@@ -108,7 +108,7 @@ int main(int argc,char** argv) {
             auto menuAction=window.findChild<QAction*>("ocrDocumentAction");
             require(menuAction && menuAction->isEnabled(),"OCR menu enabled for scanned document");
             auto entries=window.findChild<QMenu*>("viewMenu")->actions(); int position=entries.indexOf(menuAction);
-            require(position>0 && position+1<entries.size() && entries[position-1]->isSeparator() && entries[position+1]->isSeparator(),"OCR menu has its own section");
+            require(position>0 && position+2<entries.size() && entries[position-1]->isSeparator() && entries[position+1]->menu()==window.findChild<QMenu*>("ocrPolicyMenu") && entries[position+2]->isSeparator(),"OCR action and policy submenu share their own section");
             capture(window,"ocr-prompt");
             tick(window,8); require(!pageView(window)->pdf.hasOcr(0),"prompt does not start recognition");
             menuAction->trigger(); require(apply->isHidden() && !bar->isHidden() && !menuAction->isEnabled(),"menu starts OCR and disables duplicate activation");

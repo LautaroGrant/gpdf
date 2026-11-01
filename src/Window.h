@@ -30,7 +30,7 @@ public:
         annotations = new QListWidget; annotations->setObjectName("annotationList");
         annotations->setMinimumWidth(220); annotations->setWordWrap(true);
         annotations->setItemDelegate(new SearchResultDelegate(annotations,Qt::UserRole+2));
-        annotations->setToolTip(gpdfTr("Seleccionar una anotación para editarla, cambiar su color o borrarla. Doble clic para editar el comentario."));
+        annotations->setProperty("suppressHoverHelp",true);
         auto panel=new QWidget;
         panel->setObjectName("annotationsPanel");
         panel->setAutoFillBackground(true);
@@ -91,7 +91,7 @@ public:
         searchLayout->addWidget(searchInput);
         auto searchButton=new QPushButton(gpdfTr("Buscar")); searchButton->setObjectName("searchButton"); searchLayout->addWidget(searchButton);
         searchStatus=new QLabel(gpdfTr("Ingresar texto para buscar.")); searchStatus->setObjectName("searchStatus"); searchStatus->setWordWrap(true); searchLayout->addWidget(searchStatus);
-        searchResults=new QListWidget; searchResults->setObjectName("searchResults"); searchResults->setWordWrap(true); searchResults->setLayoutMode(QListView::Batched); searchResults->setBatchSize(64); searchResults->setItemDelegate(new SearchResultDelegate(searchResults)); searchLayout->addWidget(searchResults);
+        searchResults=new QListWidget; searchResults->setObjectName("searchResults"); searchResults->setProperty("suppressHoverHelp",true); searchResults->setWordWrap(true); searchResults->setLayoutMode(QListView::Batched); searchResults->setBatchSize(64); searchResults->setItemDelegate(new SearchResultDelegate(searchResults)); searchLayout->addWidget(searchResults);
         searchTask=new QTimer(this); searchTask->setObjectName("searchTask"); searchTask->setSingleShot(true); searchTask->setInterval(0);
         searchDebounce=new QTimer(this); searchDebounce->setObjectName("searchDebounce"); searchDebounce->setSingleShot(true); searchDebounce->setInterval(600);
         connect(searchTask,&QTimer::timeout,[this]{ searchNextPage(); });
@@ -105,8 +105,9 @@ public:
         searchPanel->hide();
         setCentralWidget(splitter);
         documentToolbar=addToolBar(gpdfTr("Documentos")); documentToolbar->setObjectName("documentToolbar"); documentToolbar->setMovable(false); documentToolbar->setFloatable(false); documentToolbar->setContextMenuPolicy(Qt::PreventContextMenu);
-        documentTabs=new DocumentTabBar; documentTabs->setObjectName("documentTabs"); documentTabs->setTabsClosable(true); documentTabs->setElideMode(Qt::ElideRight); documentTabs->setUsesScrollButtons(true); documentTabs->setExpanding(false); documentTabs->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+        documentTabs=new DocumentTabBar; documentTabs->setObjectName("documentTabs"); documentTabs->setTabsClosable(true); documentTabs->setMovable(true); documentTabs->setElideMode(Qt::ElideRight); documentTabs->setUsesScrollButtons(true); documentTabs->setExpanding(false); documentTabs->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
         documentToolbar->addWidget(documentTabs); documentToolbar->hide(); addToolBarBreak();
+        connect(documentTabs,&QTabBar::tabMoved,this,[this](int from,int to){ moveDocument(from,to); });
         connect(documentTabs,&QTabBar::currentChanged,[this](int index){ if(!changingTabs && index>=0) switchDocument(index); });
         connect(documentTabs,&QTabBar::tabCloseRequested,[this](int index){ if(switchDocument(index)) closeDocument(); });
         mainToolbar=addToolBar(gpdfTr("Herramientas")); auto toolbar=mainToolbar; toolbar->setObjectName("mainToolbar"); toolbar->setMovable(false);
@@ -135,20 +136,25 @@ public:
         ocrToolbar->addWidget(ocrHost); ocrToolbar->hide();
         connect(ocrApply,&QPushButton::clicked,this,[this]{ beginDocumentOcr(); });
         connect(ocrCancel,&QPushButton::clicked,this,[this]{ cancelDocumentOcr(); });
-        auto action = [bar](QString title, auto handler){ auto a=bar->addAction(title); QObject::connect(a,&QAction::triggered,handler); return a; };
+        auto action = [bar](QString title, auto handler){ auto a=bar->addAction(title); if(title=="‹" || title=="›" || title=="−" || title=="+") bar->widgetForAction(a)->setProperty("suppressHoverHelp",true); QObject::connect(a,&QAction::triggered,handler); return a; };
         auto separator=[](const QString& name){
             auto line=new QFrame; line->setObjectName(name);
             line->setFrameShape(QFrame::VLine); line->setFrameShadow(QFrame::Plain);
             line->setFixedHeight(22); line->setStyleSheet("color: #b8bec6;"); return line;
         };
-        viewMode=new ViewModeCombo; viewMode->setObjectName("viewMode");
+        viewMode=new IconViewModeCombo; viewMode->setObjectName("viewMode");
         viewMode->addItems({gpdfTr("Vista continua"),gpdfTr("Página individual"),gpdfTr("Dos páginas")});
-        viewMode->setToolTip(gpdfTr("Vista del documento")); bar->addWidget(viewMode);
+        viewMode->setIconSize(QSize(20,20)); viewMode->setFixedWidth(46);
+        viewMode->setAccessibleName(gpdfTr("Vista del documento"));
+        for(int i=0;i<viewMode->count();++i) viewMode->setItemIcon(i,QIcon(new GpdfToolIcon(10+i)));
+        viewMode->setToolTip(viewMode->currentText()); bar->addWidget(viewMode);
+        connect(viewMode,&QComboBox::currentIndexChanged,this,[this]{ viewMode->setToolTip(viewMode->currentText()); });
         connect(viewMode,&QComboBox::currentIndexChanged,[this](int index){ changeMode(PageView::Mode(index)); });
+        connect(viewMode,&QComboBox::activated,this,[this]{ view->setFocus(Qt::OtherFocusReason); });
         bar->addSeparator();
         action("‹",[this]{ page(-1); });
         auto pageIndicator=new QWidget; auto pageLayout=new QHBoxLayout(pageIndicator); pageLayout->setContentsMargins(0,0,0,0); pageLayout->setSpacing(3);
-        pageNumber=new QSpinBox; pageNumber->setObjectName("pageNumber"); pageNumber->setRange(1,1); pageNumber->setButtonSymbols(QAbstractSpinBox::NoButtons); pageNumber->setAlignment(Qt::AlignCenter); pageNumber->setFixedWidth(54); pageNumber->setKeyboardTracking(false); pageNumber->setToolTip(gpdfTr("Página actual: escribir un número y presionar Enter para ir a esa página.")); pageNumber->setAccessibleName(gpdfTr("Página actual"));
+        pageNumber=new QSpinBox; pageNumber->setObjectName("pageNumber"); pageNumber->setRange(1,1); pageNumber->setButtonSymbols(QAbstractSpinBox::NoButtons); pageNumber->setAlignment(Qt::AlignCenter); pageNumber->setFixedWidth(54); pageNumber->setKeyboardTracking(false); pageNumber->setProperty("suppressHoverHelp",true); pageNumber->setAccessibleName(gpdfTr("Página actual"));
         pageLabel=new QLabel("/ 0"); pageLayout->addWidget(pageNumber); pageLayout->addWidget(pageLabel); bar->addWidget(pageIndicator);
         connect(pageNumber,&QSpinBox::valueChanged,[this](int value){ jumpTo(value-1); QSignalBlocker blocker(pageNumber); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); });
         action("›",[this]{ page(1); });
@@ -159,7 +165,7 @@ public:
         zoomPercent->setButtonSymbols(QAbstractSpinBox::NoButtons);
         zoomPercent->setAlignment(Qt::AlignCenter); zoomPercent->setFixedWidth(72);
         zoomPercent->setKeyboardTracking(false); zoomPercent->setValue(int(std::lround(view->scale*100)));
-        zoomPercent->setToolTip(gpdfTr("Zoom del documento (50%–300%). En dos páginas se ajusta al ancho disponible."));
+        zoomPercent->setProperty("suppressHoverHelp",true);
         bar->addWidget(zoomPercent);
         connect(zoomPercent,&QSpinBox::valueChanged,[this](int value){ setZoom(value/100.0); });
         action("+",[this]{ zoom(0.10); });
@@ -174,7 +180,9 @@ public:
         bar->addSeparator();
         searchAction=new QAction(gpdfTr("Búsqueda"),this); addAction(searchAction);
         searchAction->setObjectName("searchAction"); searchAction->setCheckable(true);
+        searchAction->setIcon(QIcon(new GpdfToolIcon(8)));
         auto searchToggle=new QToolButton; searchToggle->setDefaultAction(searchAction);
+        searchToggle->setToolButtonStyle(Qt::ToolButtonIconOnly); searchToggle->setIconSize(QSize(24,24)); searchToggle->setAccessibleName(searchAction->text());
         leftLayout->addWidget(searchToggle,0,Qt::AlignLeft);
         leftLayout->addWidget(separator("searchToolsSeparator"));
         searchAction->setToolTip(gpdfTr("Buscar texto"));
@@ -207,7 +215,10 @@ public:
         underlineAction->setObjectName("underlineAction"); underlineAction->setIcon(QIcon(new GpdfToolIcon(5,view->underlineColor))); addAction(underlineAction);
         togglePanel=new QAction(gpdfTr("Anotaciones"),this);
         addAction(togglePanel);
+        togglePanel->setIcon(QIcon(new GpdfToolIcon(9)));
+        togglePanel->setIconVisibleInMenu(false);
         auto annotationsToggle=new QToolButton; annotationsToggle->setDefaultAction(togglePanel);
+        annotationsToggle->setToolButtonStyle(Qt::ToolButtonIconOnly); annotationsToggle->setIconSize(QSize(24,24)); annotationsToggle->setAccessibleName(togglePanel->text());
         rightLayout->addWidget(annotationsToggle,0,Qt::AlignRight);
 
         togglePanel->setObjectName("toggleAnnotations");
@@ -479,6 +490,12 @@ protected:
     }
 #endif
     bool eventFilter(QObject* object,QEvent* event) override {
+        if(event->type()==QEvent::ToolTip) {
+            for(auto widget=qobject_cast<QWidget*>(object);widget;widget=widget->parentWidget()) {
+                if(widget->property("suppressHoverHelp").toBool()) return true;
+                if(widget==this) break;
+            }
+        }
 #ifdef Q_OS_WIN
         if(event->type()==QEvent::Show && QApplication::platformName()=="windows") {
             auto widget=qobject_cast<QWidget*>(object);
@@ -543,6 +560,17 @@ protected:
                 const bool editing=isTextControl(widget) || (focused && focused->window()==this && isTextControl(focused));
                 QKeySequence pressed=key->key()==Qt::Key_Backtab ? QKeySequence(Qt::CTRL|Qt::SHIFT|Qt::Key_Tab) : QKeySequence(key->keyCombination());
                 const bool searchFocused=focused==searchInput || focused==searchResults || (focused && searchResults->isAncestorOf(focused));
+                // Contextual search keys must win before editor handling and user shortcuts.
+                const bool searchNavigation=searchFocused && !searchPanel->isHidden() &&
+                    ((key->modifiers()==Qt::NoModifier && (key->key()==Qt::Key_Up || key->key()==Qt::Key_Down)) ||
+                     ((key->modifiers()==Qt::NoModifier || key->modifiers()==Qt::ShiftModifier) &&
+                      (key->key()==Qt::Key_Return || key->key()==Qt::Key_Enter)));
+                if(searchNavigation) {
+                    key->accept();
+                    if(event->type()==QEvent::KeyPress)
+                        searchEnter(key->key()==Qt::Key_Up || key->modifiers()==Qt::ShiftModifier ? -1 : 1);
+                    return true;
+                }
                 const bool inlineActive=view->findChild<QWidget*>("inlineTextEditor")!=nullptr;
                 // Reserve typing and editor navigation before Qt's QAction shortcut dispatch.
                 // Enter/Escape retain their contextual search and annotation behavior.
@@ -705,6 +733,7 @@ private:
     QStringList recentFiles;
     QToolBar* mainToolbar=nullptr;
     bool pendingSearchNext=false;
+    int searchDirection=1;
     int lastSearchRow=-1;
     PdfDocument::AnnotationCopy copiedAnnotation;
 #ifdef Q_OS_WIN
@@ -942,6 +971,7 @@ private:
         const QStringList panels={"showThumbnailsAction","showBookmarksAction","showPersonalBookmarksAction"};
         for(int i=0;i<viewActions.size();++i) {
             auto action=viewActions[i]; QSignalBlocker blocker(action);
+            if(action->property("ocrPolicy").isValid()) action->setChecked(action->property("ocrPolicy").toInt()==int(ocrPolicy));
             if(action->property("fitMode").isValid()) action->setChecked(view->fit==PageView::Fit(action->property("fitMode").toInt()));
             if(action->property("pageMode").isValid()) action->setChecked(view->mode==PageView::Mode(action->property("pageMode").toInt()));
             if(action->property("rotation").isValid()) action->setChecked(view->rotation==action->property("rotation").toInt());
@@ -986,6 +1016,15 @@ private:
         }
         viewMenu->addSeparator();
         action(viewMenu,ocrLabel("Aplicar OCR","Apply OCR"),"ocrDocumentAction",[this]{ beginDocumentOcr(); })->setEnabled(false);
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+        ocrPolicy=OcrPolicy(std::clamp(settings.value("ocr/policy",0).toInt(),0,2));
+        auto ocrMenu=viewMenu->addMenu(ocrLabel("Configuración de OCR","OCR settings")); ocrMenu->setObjectName("ocrPolicyMenu");
+        auto ocrGroup=new QActionGroup(this);
+        const QStringList policies={ocrLabel("OCR automático","Automatic OCR"),ocrLabel("Aplicar siempre OCR","Always apply OCR"),ocrLabel("Deshabilitar OCR","Disable OCR")};
+        for(int i=0;i<policies.size();++i) {
+            auto item=action(ocrMenu,policies[i],QString("ocrPolicy%1").arg(i),[this,i]{ setOcrPolicy(OcrPolicy(i)); });
+            item->setCheckable(true); item->setProperty("ocrPolicy",i); ocrGroup->addAction(item); item->setChecked(i==int(ocrPolicy));
+        }
         viewMenu->addSeparator(); auto modes=viewMenu->addMenu(gpdfTr("Modo de vista")); auto modesGroup=new QActionGroup(this);
         const QStringList names={gpdfTr("Vista continua"),gpdfTr("Página individual"),gpdfTr("Dos páginas")};
         for(int i=0;i<3;++i) {
@@ -1447,6 +1486,24 @@ private:
     void stopAutoScroll() {
         if(autoScrollTimer && autoScrollTimer->isActive()) { autoScrollTimer->stop(); QApplication::restoreOverrideCursor(); }
     }
+    enum class OcrPolicy { Automatic, Always, Disabled };
+    OcrPolicy ocrPolicy=OcrPolicy::Automatic;
+    void setOcrPolicy(OcrPolicy policy) {
+        if(ocrPolicy==policy) return;
+        ocrPolicy=policy;
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+        settings.setValue("ocr/policy",int(policy));
+        // Invalidate callbacks before cancelling the worker; keep recognized text.
+        for(auto& state:documents) {
+            ++state->ocrGeneration; state->ocrContentRevision=0;
+            state->ocrRequested=false; state->ocrPrompt=false; state->ocrError.clear();
+        }
+        if(ocrService) ocrService->cancel();
+        ocrRunningDocument.clear();
+        ++searchGeneration; searchBusy=false; searchTask->stop();
+        updateOcrBar(); syncViewActions();
+        if(!searchInput->text().trimmed().isEmpty()) startSearch();
+    }
     OcrService* ocrService=nullptr;
     QToolBar* ocrToolbar=nullptr;
     QLabel* ocrMessage=nullptr;
@@ -1457,18 +1514,20 @@ private:
     PdfDocument& documentPdf(int index) { return index==activeDocument ? pdf : documents[index]->stored; }
     bool documentOcrReady(int index) {
         if(index<0 || index>=int(documents.size())) return true;
+        if(ocrPolicy==OcrPolicy::Disabled) return !documents[index]->ocrRequested;
         auto& state=*documents[index]; const auto content=documentPdf(index).contentRevision();
         if(state.ocrContentRevision!=content) {
             state.ocrContentRevision=content; state.ocrNextPage=0; state.ocrComplete=false; state.ocrError.clear();
             state.ocrSamplePage=0; state.ocrRequested=false; state.ocrPrompt=false;
             state.ocrDismissed=false; state.ocrChecked.clear(); ++state.ocrGeneration;
             state.ocrNeeded=false;
+            if(ocrPolicy==OcrPolicy::Always) state.ocrRequested=true;
         }
         return state.ocrComplete || state.ocrPrompt || state.ocrDismissed;
     }
     void updateOcrAction() {
         auto action=findChild<QAction*>("ocrDocumentAction"); if(!action) return;
-        const bool enabled=activeDocument>=0 && documents[activeDocument]->ocrNeeded && !documents[activeDocument]->ocrRequested;
+        const bool enabled=activeDocument>=0 && pdf.loaded() && (ocrPolicy==OcrPolicy::Disabled || documents[activeDocument]->ocrNeeded) && !documents[activeDocument]->ocrRequested;
         action->setEnabled(enabled);
 #ifdef Q_OS_WIN
         if(nativeMenu) EnableMenuItem(nativeMenu,viewCommandBase+UINT(viewActions.indexOf(action)),MF_BYCOMMAND|(enabled ? MF_ENABLED : MF_GRAYED));
@@ -1481,7 +1540,7 @@ private:
         const auto& state=*documents[activeDocument];
         const bool running=state.ocrRequested && !state.ocrComplete;
         const bool failed=!state.ocrError.isEmpty();
-        ocrToolbar->setVisible(state.ocrPrompt || running || failed);
+        ocrToolbar->setVisible(running || failed || (ocrPolicy!=OcrPolicy::Disabled && state.ocrPrompt));
         ocrApply->setVisible(state.ocrPrompt || failed);
         ocrApply->setText(failed ? ocrLabel("Reintentar OCR","Retry OCR") : ocrLabel("Aplicar OCR","Apply OCR"));
         ocrCancel->setText(running ? ocrLabel("Cancelar","Cancel") : ocrLabel("Ahora no","Not now"));
@@ -1491,9 +1550,10 @@ private:
         ocrMessage->setText(text); ocrMessage->setToolTip(failed ? text+"\n"+state.ocrError : text);
     }
     void beginDocumentOcr() {
-        if(activeDocument<0) return;
+        if(activeDocument<0 || !pdf.loaded()) return;
         auto& state=*documents[activeDocument];
-        if(!state.ocrNeeded || state.ocrRequested) return;
+        if((ocrPolicy!=OcrPolicy::Disabled && !state.ocrNeeded) || state.ocrRequested) return;
+        state.ocrContentRevision=pdf.contentRevision();
         state.ocrPrompt=false; state.ocrDismissed=false; state.ocrRequested=true;
         state.ocrComplete=false; state.ocrNextPage=0; ++state.ocrGeneration;
         state.ocrError.clear();
@@ -1512,7 +1572,7 @@ private:
     void offerDocumentOcr(int index) {
         auto& state=*documents[index];
         state.ocrNeeded=true;
-        if(documentPdf(index).pageCount()<=15) {
+        if(ocrPolicy==OcrPolicy::Always || documentPdf(index).pageCount()<=15) {
             state.ocrRequested=true; state.ocrComplete=false; state.ocrNextPage=0;
         } else { state.ocrPrompt=true; state.ocrComplete=true; }
         if(index==activeDocument) {
@@ -1543,7 +1603,18 @@ private:
         if(!lock.owns_lock()) return;
         // Prioritize the visible document, then finish the other open documents.
         int target=activeDocument;
-        if(documentOcrReady(target)) {
+        if(ocrPolicy==OcrPolicy::Disabled) {
+            // Only explicit requests may run; never sample or offer OCR here.
+            if(!documents[target]->ocrRequested) {
+                target=-1;
+                for(int i=0;i<int(documents.size());++i) if(documents[i]->ocrRequested) { target=i; break; }
+                if(target<0) return;
+            }
+            if(documents[target]->ocrContentRevision!=documentPdf(target).contentRevision()) {
+                documents[target]->ocrRequested=false;
+                return;
+            }
+        } else if(documentOcrReady(target)) {
             // Sampled native PDFs remain idle. Check only newly visited pages to
             // detect mixed documents without traversing the rest of the book.
             auto& active=*documents[target];
@@ -1634,6 +1705,16 @@ private:
     bool changingTabs=false;
     QToolBar* documentToolbar=nullptr;
     QTabBar* documentTabs=nullptr;
+    void moveDocument(int from,int to) {
+        if(from==to || from<0 || to<0 || from>=int(documents.size()) || to>=int(documents.size())) return;
+        // The active PDF lives outside DocumentState; preserve its identity when indices move.
+        auto* active=activeDocument>=0 ? documents[activeDocument].get() : nullptr;
+        auto moved=std::move(documents[from]);
+        documents.erase(documents.begin()+from);
+        documents.insert(documents.begin()+to,std::move(moved));
+        for(int i=0;i<int(documents.size());++i) if(documents[i].get()==active) { activeDocument=i; break; }
+        saveSession();
+    }
     void updateDocumentTabs() {
         QSignalBlocker blocker(documentTabs);
         while(documentTabs->count()>int(documents.size())) documentTabs->removeTab(documentTabs->count()-1);
@@ -1729,16 +1810,29 @@ private:
         if(!documentOcrReady(activeDocument)) { showOcrProgress(activeDocument); return; }
         searchStatus->setText(gpdfTr("Buscando…")); searchTask->start();
     }
-    void searchEnter() {
+    void searchEnter(int direction=1) {
         if(searchDebounce->isActive() || searchQuery!=searchInput->text().trimmed() || searchQuery.isEmpty()) { startSearch(); return; }
-        pendingSearchNext=true; advanceSearchResult();
+        searchDirection=direction; pendingSearchNext=true; advanceSearchResult();
     }
     void advanceSearchResult() {
         if(!pendingSearchNext || matches.isEmpty()) { if(!searchBusy && !searchTask->isActive()) pendingSearchNext=false; return; }
         int target=-1;
         auto focused=QApplication::focusWidget();
         const bool resultsFocused=focused==searchResults || (focused && searchResults->isAncestorOf(focused));
-        if(resultsFocused && searchResults->currentRow()>=0) {
+        if(searchDirection<0) {
+            if(resultsFocused && searchResults->currentRow()>=0) target=searchResults->currentRow()-1;
+            else if(lastSearchRow>=0 && lastSearchRow<matches.size() && matches[lastSearchRow].page==pdf.pageIndex() && view->first<0 && view->last<0) target=lastSearchRow-1;
+            else {
+                int selectedCharacter=std::min(view->first,view->last);
+                for(int i=matches.size()-1;i>=0;--i) {
+                    const auto& match=matches[i];
+                    if(match.page<pdf.pageIndex() || (match.page==pdf.pageIndex() &&
+                       (selectedCharacter>=0 ? match.first<selectedCharacter : (match.rectangles.isEmpty() || view->deviceRect(match.rectangles.first()).top()<=scroll->verticalScrollBar()->value())))) { target=i; break; }
+                }
+            }
+            // Wait for all results before wrapping backwards to the last match.
+            if(target<0 && !searchBusy && !searchTask->isActive()) target=matches.size()-1;
+        } else if(resultsFocused && searchResults->currentRow()>=0) {
             if(searchResults->currentRow()+1<matches.size()) target=searchResults->currentRow()+1;
             else if(!searchBusy && !searchTask->isActive()) target=0;
             else return;
@@ -1752,7 +1846,7 @@ private:
                     (selectedCharacter>=0 ? match.first>selectedCharacter : (match.rectangles.isEmpty() || view->deviceRect(match.rectangles.first()).bottom()>=scroll->verticalScrollBar()->value())))) { target=i; break; }
             }
         }
-        if(target<0 && !searchBusy && !searchTask->isActive()) target=0;
+        if(target<0 && searchDirection>0 && !searchBusy && !searchTask->isActive()) target=0;
         if(target<0) return;
         pendingSearchNext=false;
         if(searchResults->currentRow()==target) showSearchResult(target); else searchResults->setCurrentRow(target);
@@ -1772,7 +1866,7 @@ private:
             matches.append(match);
             auto item=new QListWidgetItem(QString(gpdfTr("Página %1 · %2")).arg(match.page+1).arg(match.context));
             item->setData(Qt::UserRole,QString(gpdfTr("<b>Página %1</b> · %2")).arg(match.page+1).arg(match.contextHtml));
-            item->setToolTip(match.context); searchResults->addItem(item);
+            searchResults->addItem(item);
         }
         ++nextSearchPage;
         if(nextSearchPage>=pdf.pageCount()) {
@@ -1878,6 +1972,7 @@ private:
         scroll->verticalScrollBar()->setValue(mode==PageView::Continuous ? int(view->activeRect().top()) : 0);
         scroll->horizontalScrollBar()->setValue(0);
         refreshPanel(); updatingView=false;
+        view->setFocus(Qt::OtherFocusReason);
     }
     void zoom(double delta) {
         setZoom(std::clamp((view->fit==PageView::Manual ? view->scale : view->effectiveScale)+delta,0.5,3.0));
