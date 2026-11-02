@@ -510,6 +510,27 @@ int main(int argc,char** argv) {
             std::cout<<"PASS: title theme switching, compact menus, selection context copy/highlight/underline and undo."<<std::endl;
             return 0;
         }
+        {
+            Window home;
+            auto number=home.findChild<QSpinBox*>("pageNumber");
+            auto total=home.findChild<QLabel*>("pageTotal");
+            require(number && total && number->text().trimmed().isEmpty() && total->text().isEmpty() && !number->isEnabled(),"empty home page indicator");
+            const auto emptySize=number->parentWidget()->sizeHint();
+            PdfDocument sample; require(sample.createSample(3),"page indicator sample");
+            const auto path=directory.filePath("page-indicator.pdf");
+            require(sample.saveCopy(path),"save page indicator sample");
+            for(int pass=0;pass<2;++pass) {
+                home.openDocument(path);
+                require(number->isEnabled() && number->text()=="1" && total->text().trimmed()=="/ 3","restore page indicator on open");
+                require(number->parentWidget()->sizeHint()==emptySize,"page indicator keeps layout space");
+                number->setValue(2);
+                require(number->text()=="2","page navigation remains editable");
+                number->setValue(1);
+                home.findChild<QAction*>("closeDocumentAction")->trigger();
+                require(!number->isEnabled() && number->text().trimmed().isEmpty() && total->text().isEmpty(),"clear page indicator after closing last file");
+                require(number->parentWidget()->sizeHint()==emptySize,"empty indicator preserves layout after close");
+            }
+        }
         Window window;
         auto updateCheck=window.findChild<QAction*>("checkUpdatesAction");
         auto automaticUpdates=window.findChild<QAction*>("automaticUpdatesAction");

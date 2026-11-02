@@ -154,8 +154,8 @@ public:
         bar->addSeparator();
         action("‹",[this]{ page(-1); });
         auto pageIndicator=new QWidget; auto pageLayout=new QHBoxLayout(pageIndicator); pageLayout->setContentsMargins(0,0,0,0); pageLayout->setSpacing(3);
-        pageNumber=new QSpinBox; pageNumber->setObjectName("pageNumber"); pageNumber->setRange(1,1); pageNumber->setButtonSymbols(QAbstractSpinBox::NoButtons); pageNumber->setAlignment(Qt::AlignCenter); pageNumber->setFixedWidth(54); pageNumber->setKeyboardTracking(false); pageNumber->setProperty("suppressHoverHelp",true); pageNumber->setAccessibleName(gpdfTr("Página actual"));
-        pageLabel=new QLabel("/ 0"); pageLayout->addWidget(pageNumber); pageLayout->addWidget(pageLabel); bar->addWidget(pageIndicator);
+        pageNumber=new QSpinBox; pageNumber->setObjectName("pageNumber"); pageNumber->setRange(1,1); pageNumber->setButtonSymbols(QAbstractSpinBox::NoButtons); pageNumber->setAlignment(Qt::AlignCenter); pageNumber->setFixedWidth(54); pageNumber->setKeyboardTracking(false); pageNumber->setProperty("suppressHoverHelp",true); pageNumber->setAccessibleName(gpdfTr("Página actual")); pageNumber->setSpecialValueText(QStringLiteral(" ")); pageNumber->setEnabled(false);
+        pageLabel=new QLabel("/ 0  "); pageLabel->setObjectName("pageTotal"); pageLabel->setMinimumWidth(pageLabel->sizeHint().width()); pageLabel->clear(); pageLayout->addWidget(pageNumber); pageLayout->addWidget(pageLabel); bar->addWidget(pageIndicator);
         connect(pageNumber,&QSpinBox::valueChanged,[this](int value){ jumpTo(value-1); QSignalBlocker blocker(pageNumber); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); });
         action("›",[this]{ page(1); });
         bar->addSeparator();
@@ -241,6 +241,21 @@ public:
         view->activated=[this](int){ refreshPanel(); };
         view->annotationSelected=[this](int index){ int row=annotationRow(pdf.pageIndex(),index); annotations->setCurrentRow(row); view->selectedAnnotation=index; view->update(); };
         view->navigate=[this](int direction){ page(direction); };
+        view->linkActivated=[this](const PdfDocument::LinkTarget& link){
+            if(link.page>=0) {
+                if(!view->finishText()) return;
+                jumpTo(link.page);
+                if(pdf.pageIndex()!=link.page) return;
+                if(link.hasX || link.hasY) {
+                    auto position=pdf.normalizedToPage(link.page,{0,0});
+                    if(link.hasX) position.setX(link.position.x());
+                    if(link.hasY) position.setY(link.position.y());
+                    auto point=view->devicePoint(position);
+                    scroll->horizontalScrollBar()->setValue(int(point.x()));
+                    scroll->verticalScrollBar()->setValue(int(point.y()));
+                }
+            } else if(!link.url.isEmpty()) QDesktopServices::openUrl(link.url);
+        };
         view->annotationMoved=[this](int index){ refresh(index); };
         scroll->viewport()->installEventFilter(this);
         connect(scroll->verticalScrollBar(),&QScrollBar::valueChanged,[this](int){ view->hideComment(); if(!updatingView) lastSearchRow=-1; scrolling(); });
@@ -2140,8 +2155,8 @@ private:
             }
         }
         updateGoActions();
-        { QSignalBlocker pageBlocker(pageNumber); pageNumber->setEnabled(pdf.loaded()); pageNumber->setRange(1,std::max(1,pdf.pageCount())); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); }
-        pageLabel->setText(QString("/ %1  ").arg(pdf.pageCount()));
+        { QSignalBlocker pageBlocker(pageNumber); pageNumber->setEnabled(pdf.loaded()); pageNumber->setSpecialValueText(pdf.loaded() ? QString() : QStringLiteral(" ")); pageNumber->setRange(1,std::max(1,pdf.pageCount())); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); }
+        pageLabel->setText(pdf.loaded() ? QString("/ %1  ").arg(pdf.pageCount()) : QString());
         QSignalBlocker blocker(annotations);
         auto entries=annotationsForPanel();
         auto normalized=[](QString value){ QString result; for(auto c:value.toCaseFolded().normalized(QString::NormalizationForm_D)) if(c.category()!=QChar::Mark_NonSpacing) result+=c; return result; };

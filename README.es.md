@@ -1,6 +1,6 @@
-# GPDF 0.3.2 (Beta)
+# GPDF - Grant's PDF Reader
 
-GPDF es un editor de PDF minimalista, ligero y eficiente para Windows x64, desarrollado con C++ mediante las librerias de Qt Widgets y PDFium.
+GPDF es un editor de PDF minimalista, ligero y eficiente para Windows x64, desarrollado en C++ mediante las librerias de Qt Widgets y PDFium.
 
 ## ¿Por qué GPDF?
 
@@ -14,7 +14,7 @@ Diseñado originalmente para estudiantes y académicos, GPDF está dirigido a cu
 
 ## Instalar y ejecutar
 
-Simplemente ejecutar el instalador en Windows x64.
+Simplemente descargar y ejecutar el instalador en Windows x64.
 
 Enlace a las versiones publicadas: https://github.com/LautaroGrant/gpdf/releases
 

@@ -22,7 +22,7 @@ public:
         setCursor(pageAt(position)>=0 ? gpdfEraserCursor(devicePixelRatioF()) : QCursor(Qt::ArrowCursor));
     }
     void eraseAt(QPointF position) {
-        int page=pageAt(position); if(page<0) return; activate(page);
+        int page=pageAt(position); if(page<0 || !activate(page)) return;
         int index=pdf.drawingAt(pdfPoint(position),4/effectiveScale);
         if(index>=0 && pdf.removeAnnotation(index)) { resetSelection(); if(changed) changed(); }
     }
@@ -41,6 +41,11 @@ public:
     std::function<void(int)> activated;
     std::function<void(int)> annotationSelected;
     std::function<void(int)> navigate;
+    std::function<void(const PdfDocument::LinkTarget&)> linkActivated;
+    PdfDocument::LinkTarget pressedLink;
+    QPointF linkPressPosition;
+    int linkPressPage=-1;
+    quint64 linkPressRevision=0;
     std::function<void(int)> annotationMoved;
     explicit PageView(PdfDocument& document) : pdf(document),cache(64*1024),previewCache(8*1024) {
         setMouseTracking(true); setFocusPolicy(Qt::StrongFocus); workers.setMaxThreadCount(2);
@@ -278,10 +283,12 @@ public:
         return r.topLeft()+QPointF(display.x()*r.width(),display.y()*r.height());
     }
     QRectF deviceRect(QRectF r) const { return QRectF(devicePoint(r.topLeft()),devicePoint(r.bottomRight())).normalized(); }
-    void activate(int index) {
-        if(index<0 || index==pdf.pageIndex()) return;
-        if(!finishText()) return;
-        if(pdf.setPage(index)) { resetSelection(true); refreshNavigation(); if(activated) activated(index); }
+    bool activate(int index) {
+        if(index<0) return false;
+        if(index==pdf.pageIndex()) return true;
+        if(!finishText() || !pdf.setPage(index)) return false;
+        resetSelection(true); refreshNavigation(); if(activated) activated(index);
+        return true;
     }
 protected:
     bool eventFilter(QObject* target,QEvent* event) override {
@@ -391,10 +398,15 @@ protected:
     }
     void mousePressEvent(QMouseEvent* event) override {
         if(event->button()!=Qt::LeftButton || !pdf.loaded()) return;
+        pressedLink={};
         setFocus();
         int index=pageAt(event->position()); if(index<0) return;
-        activate(index);
+        if(!activate(index)) return;
         const auto p=pdfPoint(event->position());
+        if(tool==Select) {
+            pressedLink=pdf.linkAt(index,p); linkPressPosition=event->position();
+            linkPressPage=index; linkPressRevision=pdf.revision();
+        }
         if(tool==Select && wordClickTimer.isValid() && wordClickTimer.elapsed()<=QApplication::doubleClickInterval() && wordClickRevision==pdf.revision() && wordClickPage==pdf.pageIndex() && (event->position()-wordClickPosition).manhattanLength()<=QApplication::startDragDistance()) {
             wordClickTimer.invalidate();
             auto range=pdf.lineRange(pdf.characterAt(p));
@@ -426,7 +438,8 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override {
         if(!(event->buttons() & Qt::LeftButton)) {
             int hoveredPage=pageAt(event->position());
-            if(hoveredPage<0) { setCursor(Qt::ArrowCursor); return; }
+            if(hoveredPage<0) { setToolTip({}); setCursor(Qt::ArrowCursor); return; }
+            if(tool!=Select) setToolTip({});
             if(tool==Eraser) { updateEraserCursor(event->position()); return; }
             if(tool==Pen || tool==Note) { setCursor(Qt::CrossCursor); return; }
             if(tool==Text) { setCursor(Qt::IBeamCursor); return; }
@@ -435,11 +448,19 @@ protected:
             bool text=false;
             if(tool==Select && index>=0) {
                 QPointF point=pdfPointOnPage(index,event->position());
+                auto link=pdf.linkAt(index,point);
+                if(link.valid()) {
+                    setCursor(Qt::PointingHandCursor);
+                    setToolTip(link.page>=0 ? QString(gpdfTr("Página %1")).arg(link.page+1) : link.url.toDisplayString());
+                    return;
+                }
                 text=pdf.textAt(index,point,4.0/effectiveScale);
             }
+            setToolTip({});
             setCursor(text ? Qt::IBeamCursor : Qt::ArrowCursor);
             return;
         }
+        if((event->position()-linkPressPosition).manhattanLength()>=QApplication::startDragDistance()) pressedLink={};
         if(!pdf.loaded()) return;
         if(tool==Eraser) { updateEraserCursor(event->position()); eraseAt(event->position()); return; }
         if(tool==Select && dragCandidate) {
@@ -452,9 +473,18 @@ protected:
         if(tool==Pen && !stroke.isEmpty()) stroke.append(p);
         update();
     }
-    void leaveEvent(QEvent*) override { unsetCursor(); }
+    void leaveEvent(QEvent*) override { setToolTip({}); unsetCursor(); }
     void mouseReleaseEvent(QMouseEvent* event) override {
         if(event->button()!=Qt::LeftButton) return;
+        auto link=pressedLink; pressedLink={};
+        if(tool==Select && link.valid() && !draggingText && pdf.revision()==linkPressRevision
+           && pageAt(event->position())==linkPressPage
+           && (event->position()-linkPressPosition).manhattanLength()<QApplication::startDragDistance()
+           && pdf.linkAt(linkPressPage,pdfPointOnPage(linkPressPage,event->position()))==link) {
+            resetSelection(); update();
+            if(linkActivated) linkActivated(link);
+            return;
+        }
         if(draggingText && dragIsComment && pdf.revision()==dragRevision) {
             int destination=pageAt(event->position());
             if(destination>=0) {
@@ -478,7 +508,7 @@ protected:
     }
     void mouseDoubleClickEvent(QMouseEvent* event) override {
         if(event->button()!=Qt::LeftButton || tool!=Select || !pdf.loaded()) return;
-        int page=pageAt(event->position()); if(page<0) return; activate(page);
+        int page=pageAt(event->position()); if(page<0 || !activate(page)) return;
         auto p=pdfPoint(event->position()); int hit=annotationAt(p);
         if(hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_TEXT) showComment(hit);
         else if(hit>=0 && pdf.annotationType(hit)==FPDF_ANNOT_FREETEXT) beginText(p,hit);

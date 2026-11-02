@@ -30,3 +30,9 @@ Estas medidas reducen contención con tareas de fondo. No convierten las operaci
 ## Verificación
 
 CTest ejecuta pdf_roundtrip, annotation_ui, pdf_corpus, language_spanish y language_english. La herramienta corpus_smoke recorre tamaños y texto de todas las páginas, renderiza primera/intermedia/última y edita sólo copias. Las pruebas de idioma verifican traducciones, exportaciones, catálogo, atajos personalizados y preferencias al reiniciar. Sus hashes se calculan por streaming. Documentos del usuario no se incorporan como fixtures ni se versionan.
+
+## Hipervínculos
+
+PdfDocument::linkAt resuelve anotaciones Link mediante PDFium bajo el mutex global y devuelve datos propios. Admite destinos internos directos y acciones GoTo, así como URI http, https y mailto. PageView transforma el punto con la geometría existente, muestra el destino y activa el enlace al soltar sin arrastre. Window abre las URI con Qt y navega a páginas internas, respetando coordenadas XYZ cuando existen. Otros modos de ajuste de destino conservan el zoom actual. No detecta URL que sean únicamente texto ni ejecuta acciones Launch, JavaScript o archivos remotos. La prueba pdf_links genera su propio PDF y verifica detección, destinos, filtrado, rotación, zoom y cancelación por arrastre.
+
+La página auxiliar de interacción se comparte entre conversiones de coordenadas, consultas de enlaces y hover de texto. El texto de esa página se carga de forma diferida; el documento conserva como máximo una página auxiliar y la libera al cerrar o cambiar de documento.

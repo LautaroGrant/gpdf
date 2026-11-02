@@ -16,3 +16,8 @@
 *.pfx
 *.p12
 /tmp/
+
+# Editor recovery and backup files
+/src/#*#
+*~
+*.bak

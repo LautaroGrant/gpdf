@@ -434,20 +434,18 @@ QSizeF PdfDocument::pageSize(int index) const { std::lock_guard apiGuard(pdfiumM
 }
 QPointF PdfDocument::pageToNormalized(int index,QPointF point) const { std::lock_guard apiGuard(pdfiumMutex);
     if(!doc_ || index<0 || index>=pageCount()) return {};
-    auto page=index==index_ ? page_ : FPDF_LoadPage(doc_,index);
+    auto page=interactionPage(index);
     if(!page) return {};
     int x=0,y=0;
     const bool ok=FPDF_PageToDevice(page,0,0,1000000,1000000,0,point.x(),point.y(),&x,&y);
-    if(index!=index_) FPDF_ClosePage(page);
     return ok ? QPointF(x/1000000.0,y/1000000.0) : QPointF();
 }
 QPointF PdfDocument::normalizedToPage(int index,QPointF point) const { std::lock_guard apiGuard(pdfiumMutex);
     if(!doc_ || index<0 || index>=pageCount()) return {};
-    auto page=index==index_ ? page_ : FPDF_LoadPage(doc_,index);
+    auto page=interactionPage(index);
     if(!page) return {};
     double x=0,y=0;
     const bool ok=FPDF_DeviceToPage(page,0,0,1000000,1000000,0,int(std::lround(point.x()*1000000)),int(std::lround(point.y()*1000000)),&x,&y);
-    if(index!=index_) FPDF_ClosePage(page);
     return ok ? QPointF(x,y) : QPointF();
 }
 QImage PdfDocument::renderPage(int index,double scale,QSize pixelSize,bool lcdText) const { std::lock_guard apiGuard(pdfiumMutex);
@@ -665,13 +663,8 @@ bool PdfDocument::textAt(int index,QPointF point,double margin) const { std::loc
     QVector<QRectF> freshRegions;
     auto cachedRegions=hoverRegions_->object(index);
     if(!cachedRegions) {
-    if(index!=index_ && index!=hoverIndex_) {
-        if(hoverText_) FPDFText_ClosePage(hoverText_);
-        if(hoverPage_) FPDF_ClosePage(hoverPage_);
-        hoverPage_=FPDF_LoadPage(doc_,index);
-        hoverText_=hoverPage_ ? FPDFText_LoadPage(hoverPage_) : nullptr;
-        hoverIndex_=index;
-    }
+    if(!interactionPage(index)) return false;
+    if(index!=index_ && !hoverText_) hoverText_=FPDFText_LoadPage(hoverPage_);
     auto text=index==index_ ? text_ : hoverText_;
     if(!text) return false;
     auto& regions=freshRegions;
@@ -1152,4 +1145,52 @@ bool PdfDocument::formatDrawing(int index,const QColor& color,double width) {
     if(ok && type==FPDF_ANNOT_UNDERLINE) ok=underlineAppearance(annot,color,width);
     if(!ok) { FPDFAnnot_SetColor(annot,FPDFANNOT_COLORTYPE_Color,oldColor.red(),oldColor.green(),oldColor.blue(),oldColor.alpha()); FPDFAnnot_SetBorder(annot,horizontal,vertical,oldWidth); if(size) FPDFAnnot_SetAP(annot,FPDF_ANNOT_APPEARANCEMODE_NORMAL,ap.data()); }
     FPDFPage_CloseAnnot(annot); if(ok) { dirty_=true; recordHistory(); } return ok;
+}
+
+PdfDocument::LinkTarget PdfDocument::linkAt(int index,QPointF point) const {
+    std::lock_guard apiGuard(pdfiumMutex);
+    LinkTarget result;
+    if(!doc_ || index<0 || index>=pageCount()) return result;
+    auto page=interactionPage(index);
+    if(!page) return result;
+    auto link=FPDFLink_GetLinkAtPoint(page,point.x(),point.y());
+    if(link) {
+        auto dest=FPDFLink_GetDest(doc_,link);
+        auto action=FPDFLink_GetAction(link);
+        if(!dest && action && FPDFAction_GetType(action)==PDFACTION_GOTO) dest=FPDFAction_GetDest(doc_,action);
+        if(dest) {
+            result.page=FPDFDest_GetDestPageIndex(doc_,dest);
+            if(result.page<0 || result.page>=pageCount()) result.page=-1;
+            FPDF_BOOL x=false,y=false,z=false; FS_FLOAT px=0,py=0,zoom=0;
+            if(FPDFDest_GetLocationInPage(dest,&x,&y,&z,&px,&py,&zoom)) {
+                result.hasX=x && std::isfinite(px); result.hasY=y && std::isfinite(py);
+                result.position={result.hasX ? px : 0,result.hasY ? py : 0};
+            }
+        } else if(action && FPDFAction_GetType(action)==PDFACTION_URI) {
+            auto size=FPDFAction_GetURIPath(doc_,action,nullptr,0);
+            if(size>1 && size<=65536) {
+                QByteArray bytes(int(size),'\0');
+                if(FPDFAction_GetURIPath(doc_,action,bytes.data(),size)==size) {
+                    bytes.chop(1); auto url=QUrl::fromEncoded(bytes,QUrl::StrictMode);
+                    auto scheme=url.scheme().toLower();
+                    if(url.isValid() && (scheme=="https" || scheme=="http" || scheme=="mailto")
+                       && (scheme=="mailto" || !url.host().isEmpty())) result.url=url;
+                }
+            }
+        }
+    }
+    return result;
+}
+
+FPDF_PAGE PdfDocument::interactionPage(int index) const {
+    if(!doc_ || index<0 || index>=pageCount()) return nullptr;
+    if(index==index_) return page_;
+    if(index!=hoverIndex_) {
+        if(hoverText_) FPDFText_ClosePage(hoverText_);
+        if(hoverPage_) FPDF_ClosePage(hoverPage_);
+        hoverText_=nullptr;
+        hoverPage_=FPDF_LoadPage(doc_,index);
+        hoverIndex_=hoverPage_ ? index : -1;
+    }
+    return hoverPage_;
 }

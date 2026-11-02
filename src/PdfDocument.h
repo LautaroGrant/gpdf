@@ -1,6 +1,7 @@
 #pragma once
 #include "Translations.h"
 #include <QImage>
+#include <QUrl>
 #include <QColor>
 #include <QHash>
 #include <QCache>
@@ -61,6 +62,15 @@ public:
     bool saveRecovery(const QString& path) const;
     void markRecovered();
     QVector<AnnotationEntry> pageAnnotations(int page) const;
+    struct LinkTarget {
+        QUrl url;
+        int page=-1;
+        QPointF position;
+        bool hasX=false,hasY=false;
+        bool valid() const { return page>=0 || !url.isEmpty(); }
+        bool operator==(const LinkTarget&) const = default;
+    };
+    LinkTarget linkAt(int page,QPointF point) const;
     struct Bookmark { QString title; int page; int depth; };
     QVector<Bookmark> bookmarks() const;
     PdfDocument();
@@ -138,6 +148,8 @@ private:
     mutable bool annotationsCached_=false;
     mutable QVector<AnnotationEntry> annotationEntries_;
     mutable QHash<int,QVector<AnnotationEntry>> annotationPages_;
+    // Caller holds apiMutex(); returned page is owned by this document.
+    FPDF_PAGE interactionPage(int index) const;
     void closePage();
     void close();
     bool fail(const QString& message);

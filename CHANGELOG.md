@@ -1,7 +1,10 @@
 # Changelog
 
-## 0.3.2 — November 1, 2026
+## 0.3.3 - November 2, 2026
 
+- Click PDF hyperlinks to open HTTP/HTTPS URLs and email links, or navigate to internal PDF destinations. 
+
+## 0.3.2 — November 1, 2026
 
 - Added persistent automatic, always-on and disabled OCR policies under View. Disabled mode remains silent but allows an explicit Apply OCR request. Existing selectable text is preserved.
 - Reorder open documents by dragging their tabs while preserving the active document and reading position.
