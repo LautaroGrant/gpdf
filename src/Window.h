@@ -2,15 +2,25 @@
 #include "PageView.h"
 #include "AnnotationExport.h"
 #include "SessionStore.h"
+#include "DocumentTransfer.h"
 #include "NativeScrollCursor.h"
 #include "UpdateManager.h"
 #include "OcrService.h"
+#include "Workbench.h"
+#include "WelcomeDialog.h"
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QCollator>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
 
 class Window : public QMainWindow {
+    friend struct WindowTransferTest;
 public:
-    Window() {
+    explicit Window(QString recoveryDirectory={}):recoveryDirectoryOverride(std::move(recoveryDirectory)) {
         installUiTranslations();
         setWindowTitle("GPDF"); resize(1280,850);
+        setAcceptDrops(true);
         view = new PageView(pdf);
         view->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(view,&QWidget::customContextMenuRequested,this,[this](QPoint position){
@@ -27,6 +37,11 @@ public:
         scroll = new QScrollArea;
         scroll->setWidget(view); scroll->setAlignment(Qt::AlignHCenter);
         scroll->setStyleSheet("QScrollArea { background: #e9edf2; border: 0; }");
+        fileDropHint=new QLabel(this);
+        fileDropHint->setObjectName("fileDropHint");
+        fileDropHint->setAttribute(Qt::WA_TransparentForMouseEvents);
+        fileDropHint->setStyleSheet("QLabel#fileDropHint { background: #e8f2ff; color: #173b66; border: 2px solid #4a83c5; border-radius: 10px; padding: 12px 20px; font-weight: bold; }");
+        fileDropHint->hide();
         annotations = new QListWidget; annotations->setObjectName("annotationList");
         annotations->setMinimumWidth(220); annotations->setWordWrap(true);
         annotations->setItemDelegate(new SearchResultDelegate(annotations,Qt::UserRole+2));
@@ -106,6 +121,10 @@ public:
         setCentralWidget(splitter);
         documentToolbar=addToolBar(gpdfTr("Documentos")); documentToolbar->setObjectName("documentToolbar"); documentToolbar->setMovable(false); documentToolbar->setFloatable(false); documentToolbar->setContextMenuPolicy(Qt::PreventContextMenu);
         documentTabs=new DocumentTabBar; documentTabs->setObjectName("documentTabs"); documentTabs->setTabsClosable(true); documentTabs->setMovable(true); documentTabs->setElideMode(Qt::ElideRight); documentTabs->setUsesScrollButtons(true); documentTabs->setExpanding(false); documentTabs->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+        documentTabs->setStyleSheet("QTabBar::tab { padding: 2px 8px; }");
+        static_cast<DocumentTabBar*>(documentTabs)->detachRequested=[this](int index,QPoint position){ dropDocumentTab(index,position); };
+        static_cast<DocumentTabBar*>(documentTabs)->dragMoved=[this](int index,QPoint,bool outside){ if(outside) updateDocumentDragFeedback(index,false); else clearDocumentDragFeedback(); };
+        static_cast<DocumentTabBar*>(documentTabs)->dragFinished=[this]{ clearDocumentDragFeedback(); };
         documentToolbar->addWidget(documentTabs); documentToolbar->hide(); addToolBarBreak();
         connect(documentTabs,&QTabBar::tabMoved,this,[this](int from,int to){ moveDocument(from,to); });
         connect(documentTabs,&QTabBar::currentChanged,[this](int index){ if(!changingTabs && index>=0) switchDocument(index); });
@@ -154,8 +173,8 @@ public:
         bar->addSeparator();
         action("‹",[this]{ page(-1); });
         auto pageIndicator=new QWidget; auto pageLayout=new QHBoxLayout(pageIndicator); pageLayout->setContentsMargins(0,0,0,0); pageLayout->setSpacing(3);
-        pageNumber=new QSpinBox; pageNumber->setObjectName("pageNumber"); pageNumber->setRange(1,1); pageNumber->setButtonSymbols(QAbstractSpinBox::NoButtons); pageNumber->setAlignment(Qt::AlignCenter); pageNumber->setFixedWidth(54); pageNumber->setKeyboardTracking(false); pageNumber->setProperty("suppressHoverHelp",true); pageNumber->setAccessibleName(gpdfTr("Página actual")); pageNumber->setSpecialValueText(QStringLiteral(" ")); pageNumber->setEnabled(false);
-        pageLabel=new QLabel("/ 0  "); pageLabel->setObjectName("pageTotal"); pageLabel->setMinimumWidth(pageLabel->sizeHint().width()); pageLabel->clear(); pageLayout->addWidget(pageNumber); pageLayout->addWidget(pageLabel); bar->addWidget(pageIndicator);
+        pageNumber=new QSpinBox; pageNumber->setObjectName("pageNumber"); pageNumber->setRange(1,1); pageNumber->setButtonSymbols(QAbstractSpinBox::NoButtons); pageNumber->setAlignment(Qt::AlignCenter); pageNumber->setFixedWidth(54); pageNumber->setKeyboardTracking(false); pageNumber->setProperty("suppressHoverHelp",true); pageNumber->setAccessibleName(gpdfTr("Página actual")); pageNumber->setEnabled(false);
+        pageLabel=new QLabel("/ 0  "); pageLabel->setObjectName("pageTotal"); pageLabel->setMinimumWidth(pageLabel->sizeHint().width()); pageLayout->addWidget(pageNumber); pageLayout->addWidget(pageLabel); bar->addWidget(pageIndicator);
         connect(pageNumber,&QSpinBox::valueChanged,[this](int value){ jumpTo(value-1); QSignalBlocker blocker(pageNumber); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); });
         action("›",[this]{ page(1); });
         bar->addSeparator();
@@ -261,7 +280,14 @@ public:
         connect(scroll->verticalScrollBar(),&QScrollBar::valueChanged,[this](int){ view->hideComment(); if(!updatingView) lastSearchRow=-1; scrolling(); });
         view->changed=[this]{ refresh(view->tool==PageView::Eraser ? -1 : pdf.annotationCount()-1); }; view->report=[this](QString message){ error(message); };
         selectAnnotation(-1);
-        createFileActions(); createEditActions(); createViewActions(); createReadingActions(); createGoActions(); createShortcutActions(); createHelpActions(); updateToolTips(); installFileMenu();
+        createFileActions(); createEditActions(); createViewActions(); createReadingActions(); createGoActions();
+        workbenchAction=new QAction(QStringLiteral("Workbench"),this);workbenchAction->setObjectName("workbenchAction");workbenchAction->setShortcut(QKeySequence("Ctrl+Shift+W"));addAction(workbenchAction);
+        connect(workbenchAction,&QAction::triggered,this,[this]{ openWorkbench(); });
+        createShortcutActions(); createHelpActions();
+        professionalPageTimeout.setSingleShot(true);
+        professionalPageTimeout.setInterval(750);
+        connect(&professionalPageTimeout,&QTimer::timeout,this,[this]{ updateProfessionalPageIndicator(); });
+        updateToolTips(); installFileMenu();
         autoScrollTimer=new QTimer(this); autoScrollTimer->setObjectName("autoScrollTimer"); autoScrollTimer->setInterval(16);
         connect(autoScrollTimer,&QTimer::timeout,this,[this]{
             int distance=QCursor::pos().y()-autoScrollOrigin.y();
@@ -281,13 +307,19 @@ public:
         auto ocrTimer=new QTimer(this); ocrTimer->setObjectName("ocrTimer"); ocrTimer->setInterval(25);
         connect(ocrTimer,&QTimer::timeout,this,[this]{ processDocumentOcr(); }); ocrTimer->start();
         view->refresh();
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+        setProfessionalMode(settings.value("reading/professionalMode",false).toBool());
+        updateToolbarVisibility();
+        advertiseDocumentTransfer();
     }
     ~Window() override {
+        clearDocumentDragFeedback();
         delete ocrService; ocrService=nullptr;
         stopAutoScroll();
         view->shutdownWorkers();
         qApp->removeEventFilter(this);
 #ifdef Q_OS_WIN
+        if(internalWinId()) RemovePropW(reinterpret_cast<HWND>(internalWinId()),DocumentTransfer::windowProperty());
         if(nativeMenu) {
             SetMenu(reinterpret_cast<HWND>(winId()),nullptr);
             DestroyMenu(nativeMenu);
@@ -295,6 +327,15 @@ public:
 #endif
     }
     void openDocument(const QString& path) { openPath(path); }
+    void openWorkbench(const QStringList& paths={}) {
+        if(auto existing=dynamic_cast<Workbench*>(findChild<QDialog*>("workbenchDialog"))) {
+            existing->importFiles(paths);existing->raise();existing->activateWindow();return;
+        }
+        Workbench dialog(this);
+        if(pdf.loaded())dialog.setCurrentDocument([this](Workbench& workbench){if(view->finishText())workbench.useSnapshot(pdf,source.isEmpty() ? workbenchTr("PDF actual","Current PDF") : QFileInfo(source).fileName(),source);});
+        QTimer::singleShot(0,&dialog,[&dialog,paths]{dialog.importFiles(paths);});
+        dialog.exec();
+    }
     void presentForExternalOpen() {
         bool minimized=isMinimized();
         auto restore=windowState() & ~Qt::WindowMinimized;
@@ -317,6 +358,7 @@ public:
 #endif
     }
     void openExternalDocuments(const QStringList& paths) {
+        if(transferBusy || receivingTransfer) { deferredExternalOpens+=paths; return; }
         presentForExternalOpen();
         for(const auto& path:paths) openDocument(path);
         presentForExternalOpen();
@@ -402,7 +444,7 @@ public:
             list=pending; if(list.isEmpty()) return;
         }
         bool recovery=false; for(auto value:list) { auto item=value.toObject(); if(!item["backup"].toString().isEmpty() || !item["draft"].toObject().isEmpty()) recovery=true; }
-        bool recover=!recovery || QMessageBox::question(this,gpdfTr("Recuperar cambios"),gpdfTr("Hay cambios de la sesión anterior que no se guardaron. ¿Desea recuperarlos?"),QMessageBox::Yes|QMessageBox::No,QMessageBox::Yes)==QMessageBox::Yes;
+        bool recover=!recovery || !recoveryDirectoryOverride.isEmpty() || QMessageBox::question(this,gpdfTr("Recuperar cambios"),gpdfTr("Hay cambios de la sesión anterior que no se guardaron. ¿Desea recuperarlos?"),QMessageBox::Yes|QMessageBox::No,QMessageBox::Yes)==QMessageBox::Yes;
         restoringSession=true; pendingRecoveryItems=QJsonArray(); QVector<QJsonObject> restored;
         QVector<int> originalIndexes; int manifestIndex=-1;
         for(auto value:list) {
@@ -437,7 +479,52 @@ public:
         restoringSession=false; saveSession();
     }
 protected:
-    void resizeEvent(QResizeEvent* event) override { QMainWindow::resizeEvent(event); updateToolbarLayout(); }
+    static QStringList droppedPdfPaths(const QMimeData* data) {
+        QStringList paths;
+        for(const auto& url:data->urls()) {
+            if(!url.isLocalFile()) continue;
+            const QFileInfo file(url.toLocalFile());
+            if(file.isFile() && file.suffix().compare("pdf",Qt::CaseInsensitive)==0)
+                paths.append(file.absoluteFilePath());
+        }
+        paths.removeDuplicates();
+        return paths;
+    }
+    void dragEnterEvent(QDragEnterEvent* event) override {
+        updateFileDropHint(event);
+    }
+    void dragMoveEvent(QDragMoveEvent* event) override {
+        updateFileDropHint(event);
+    }
+    void updateFileDropHint(QDropEvent* event) {
+        if(!droppedPdfPaths(event->mimeData()).isEmpty() && event->possibleActions().testFlag(Qt::CopyAction)) {
+            event->setDropAction(Qt::CopyAction); event->accept();
+            fileDropHint->setText(event->modifiers().testFlag(Qt::ControlModifier)
+                ? workbenchTr("Soltar para añadir PDFs al Workbench","Drop to add PDFs to Workbench")
+                : workbenchTr("Soltar para abrir PDFs · Ctrl: abrir en Workbench","Drop to open PDFs · Ctrl: open in Workbench"));
+            fileDropHint->adjustSize();
+            positionFileDropHint();
+            fileDropHint->raise();
+            fileDropHint->show();
+        } else { fileDropHint->hide(); event->ignore(); }
+    }
+    void dragLeaveEvent(QDragLeaveEvent* event) override {
+        fileDropHint->hide();
+        event->accept();
+    }
+    void dropEvent(QDropEvent* event) override {
+        fileDropHint->hide();
+        const auto paths=droppedPdfPaths(event->mimeData());
+        if(paths.isEmpty() || !event->possibleActions().testFlag(Qt::CopyAction)) { event->ignore(); return; }
+        event->setDropAction(Qt::CopyAction); event->accept();
+        const bool workbench=event->modifiers().testFlag(Qt::ControlModifier);
+        QTimer::singleShot(0,this,[this,paths,workbench]{ if(workbench)openWorkbench(paths);else openExternalDocuments(paths); });
+    }
+    void resizeEvent(QResizeEvent* event) override {
+        QMainWindow::resizeEvent(event);
+        updateToolbarLayout();
+        if(fileDropHint && fileDropHint->isVisible()) positionFileDropHint();
+    }
     void changeEvent(QEvent* event) override {
         QMainWindow::changeEvent(event);
         if(event->type()==QEvent::WindowStateChange) {
@@ -466,6 +553,7 @@ protected:
     QMenu* createPopupMenu() override { return nullptr; }
 #ifdef Q_OS_WIN
     bool nativeEvent(const QByteArray& type,void* message,qintptr* result) override {
+        if(handleDocumentTransferEvent(message,result)) return true;
         auto msg=static_cast<MSG*>(message);
         if(msg->message==WM_SETCURSOR && LOWORD(msg->lParam)==HTCLIENT && autoScrollTimer && autoScrollTimer->isActive()) {
             if(auto cursor=NativeScrollCursor::handle(autoScrollDirection)) { SetCursor(cursor); *result=TRUE; return true; }
@@ -484,6 +572,7 @@ protected:
         }
         if(nativeMenu && msg->message==WM_COMMAND && HIWORD(msg->wParam)==0 && msg->lParam==0) {
             const UINT id=LOWORD(msg->wParam);
+            if(id==workbenchCommand) {*result=0;workbenchAction->trigger();return true;}
             if(id>=fileCommandBase && id<fileCommandBase+UINT(fileActions.size())) {
                 *result=0;
                 fileActions[int(id-fileCommandBase)]->trigger();
@@ -505,6 +594,38 @@ protected:
     }
 #endif
     bool eventFilter(QObject* object,QEvent* event) override {
+        if(object==this && (event->type()==QEvent::WindowDeactivate || event->type()==QEvent::Hide)) {
+            professionalPageTimeout.stop();
+            professionalControlHeld=professionalSpaceHeld=false; updateProfessionalPageIndicator();
+        }
+        if(professionalMode && (event->type()==QEvent::KeyPress || event->type()==QEvent::KeyRelease || event->type()==QEvent::ShortcutOverride)) {
+            auto widget=qobject_cast<QWidget*>(object); auto key=static_cast<QKeyEvent*>(event);
+            if(widget && widget->window()==this && (key->key()==Qt::Key_Control || key->key()==Qt::Key_Space)) {
+                bool editing=false;
+                for(auto parent=widget;parent && parent!=this;parent=parent->parentWidget())
+                    if(qobject_cast<QLineEdit*>(parent) || qobject_cast<QTextEdit*>(parent) || qobject_cast<QPlainTextEdit*>(parent) || qobject_cast<QComboBox*>(parent) || qobject_cast<QAbstractSpinBox*>(parent)) editing=true;
+                const bool space=key->key()==Qt::Key_Space;
+                const bool reserveSpace=space && !editing && pdf.loaded();
+                if(event->type()!=QEvent::ShortcutOverride && !key->isAutoRepeat()) {
+                    if(event->type()==QEvent::KeyRelease || !editing) {
+                        (space ? professionalSpaceHeld : professionalControlHeld)=event->type()==QEvent::KeyPress;
+                        if(event->type()==QEvent::KeyPress) professionalPageTimeout.stop();
+                        updateProfessionalPageIndicator();
+                    }
+                }
+                // Space is a temporary page hint in reading mode, never while typing.
+                if(reserveSpace) { key->accept(); return true; }
+            }
+        }
+        if(dragFeedbackTimer && dragFeedbackTimer->isActive()) {
+            if(event->type()==QEvent::KeyPress && static_cast<QKeyEvent*>(event)->key()==Qt::Key_Escape) {
+                nativeDocumentMove=false; static_cast<DocumentTabBar*>(documentTabs)->cancelDocumentDrag(); clearDocumentDragFeedback(); return true;
+            }
+            if(object==this && (event->type()==QEvent::Hide || event->type()==QEvent::WindowDeactivate)) {
+                static_cast<DocumentTabBar*>(documentTabs)->cancelDocumentDrag(); clearDocumentDragFeedback();
+            }
+        }
+        if(object==this && (event->type()==QEvent::Show || event->type()==QEvent::WinIdChange)) advertiseDocumentTransfer();
         if(event->type()==QEvent::ToolTip) {
             for(auto widget=qobject_cast<QWidget*>(object);widget;widget=widget->parentWidget()) {
                 if(widget->property("suppressHoverHelp").toBool()) return true;
@@ -573,6 +694,18 @@ protected:
                 // Ignored keys can bubble from an editor to its parent widget.
                 auto focused=QApplication::focusWidget();
                 const bool editing=isTextControl(widget) || (focused && focused->window()==this && isTextControl(focused));
+                if(!editing && pdf.loaded() && key->modifiers()==Qt::ControlModifier
+                   && (widget==view || widget==scroll || widget==scroll->viewport())
+                   && (key->key()==Qt::Key_Left || key->key()==Qt::Key_Right || key->key()==Qt::Key_Up || key->key()==Qt::Key_Down)) {
+                    key->accept();
+                    if(event->type()==QEvent::KeyPress) {
+                        const bool horizontal=key->key()==Qt::Key_Left || key->key()==Qt::Key_Right;
+                        auto bar=horizontal ? scroll->horizontalScrollBar() : scroll->verticalScrollBar();
+                        const int direction=key->key()==Qt::Key_Left || key->key()==Qt::Key_Up ? -1 : 1;
+                        bar->setValue(bar->value()+direction*qMax(bar->singleStep()*5,bar->pageStep()/3));
+                    }
+                    return true;
+                }
                 QKeySequence pressed=key->key()==Qt::Key_Backtab ? QKeySequence(Qt::CTRL|Qt::SHIFT|Qt::Key_Tab) : QKeySequence(key->keyCombination());
                 const bool searchFocused=focused==searchInput || focused==searchResults || (focused && searchResults->isAncestorOf(focused));
                 // Contextual search keys must win before editor handling and user shortcuts.
@@ -601,7 +734,7 @@ protected:
                     if(!action->isEnabled()) continue;
                     QString name=action->objectName();
                     if(name=="confirmTextAction" && (!inlineActive || searchFocused)) continue;
-                    if(name=="cancelContextAction" && !inlineActive && !autoScrollTimer->isActive() && !view->annotationDragging() && !view->commentVisible() && !isFullScreen()) continue;
+                    if(name=="cancelContextAction" && !inlineActive && !autoScrollTimer->isActive() && !view->annotationDragging() && !view->commentVisible() && !isFullScreen() && !professionalMode) continue;
                     if(name=="searchEnterAction" && !searchFocused) continue;
                     for(const auto& shortcut:action->shortcuts()) if(!shortcut.isEmpty() && shortcut==pressed) {
                         if(event->type()==QEvent::ShortcutOverride) key->accept(); else action->trigger();
@@ -614,10 +747,13 @@ protected:
             bool previous=updatingView; updatingView=true;
             view->setViewportSize(scroll->viewport()->size());
             updatingView=previous; syncViewActions();
+            updateProfessionalPageIndicator();
         }
         return QMainWindow::eventFilter(object,event);
     }
     void closeEvent(QCloseEvent* event) override {
+        if(transferBusy || receivingTransfer) { event->ignore(); return; }
+        clearDocumentDragFeedback();
         int original=activeDocument;
         for(int i=0;i<int(documents.size());++i) { if(!switchDocument(i) || !confirmDiscard()) { for(auto& doc:documents) doc->discardOnExit=false; switchDocument(original); event->ignore(); return; } }
         switchDocument(original); saveSession(true); sessionClosed=true; checkpointTimer->stop();
@@ -628,9 +764,113 @@ protected:
         event->accept();
     }
 private:
+    bool transferBusy=false,receivingTransfer=false,nativeDocumentMove=false;
+    QStringList deferredExternalOpens;
+    QSet<QString> receivedTransferTokens;
+    QPointer<QWidget> dragPreview,dropIndicator;
+    QTimer* dragFeedbackTimer=nullptr;
+    QTimer* dropIndicatorTimer=nullptr;
+    QString dragDocumentId;
+    bool dragWholeWindow=false;
+    quintptr dragPreviewTarget=0;
+    void updateDocumentDragFeedback(int index,bool wholeWindow);
+    void refreshDocumentDragFeedback();
+    void clearDocumentDragFeedback();
+    void showDocumentTransferProgress(const QString& message);
+    void showDocumentTransferResult(int insertion,int count);
+    void advertiseDocumentTransfer();
+    void dropDocumentTab(int index,QPoint globalPosition);
+    QJsonObject prepareDocumentTransfer(const QVector<int>& indexes);
+    bool receiveDocumentTransfer(const QJsonObject& request,int insertionIndex);
+    void completeDocumentTransfer(const QJsonObject& request,bool accepted);
+    void resumeAfterDocumentTransfer();
+#ifdef Q_OS_WIN
+    bool acceptsDocumentTransferAt(QPoint nativePosition) const;
+    void showDocumentDropIndicator(QPoint nativePosition);
+    void clearDocumentDropIndicator();
+    int documentTransferInsertionIndex(QPoint nativePosition) const;
+    bool handleDocumentTransferEvent(void* message,qintptr* result);
+    void sendDocumentTransfer(HWND destination,const QVector<int>& indexes,QPoint nativePosition);
+#endif
     bool sessionClosed=false;
     Qt::WindowStates lastVisibleState=Qt::WindowNoState;
     bool printDialogActive=false;
+    bool professionalMode=false;
+    bool toolbarRequestedVisible=true;
+    void updateToolbarVisibility() {
+        mainToolbar->setVisible(pdf.loaded() && !professionalMode && toolbarRequestedVisible);
+        if(auto action=findChild<QAction*>("toggleToolbarAction"))action->setEnabled(pdf.loaded() && !professionalMode);
+    }
+    bool professionalControlHeld=false,professionalSpaceHeld=false;
+    QLabel* professionalPageIndicator=nullptr;
+    QGraphicsOpacityEffect* professionalPageOpacity=nullptr;
+    QPropertyAnimation* professionalPageFade=nullptr;
+    QTimer professionalPageTimeout;
+    QString professionalLastDocument;
+    int professionalLastPage=-1;
+    void updateProfessionalPageNavigation() {
+        if(!professionalMode) return;
+        const QString document=pdf.loaded() && activeDocument>=0 ? documents[activeDocument]->id : QString();
+        const int page=document.isEmpty() ? -1 : pdf.pageIndex();
+        if(document!=professionalLastDocument) professionalPageTimeout.stop();
+        else if(page>=0 && page!=professionalLastPage && !professionalControlHeld && !professionalSpaceHeld)
+            professionalPageTimeout.start();
+        professionalLastDocument=document;
+        professionalLastPage=page;
+        updateProfessionalPageIndicator();
+    }
+    void updateProfessionalPageIndicator() {
+        const bool show=professionalMode && pdf.loaded()
+            && (professionalControlHeld || professionalSpaceHeld || professionalPageTimeout.isActive());
+        if(!show) {
+            if(!professionalPageIndicator || professionalPageIndicator->isHidden()) return;
+            if(!professionalMode || !pdf.loaded()) { professionalPageFade->stop(); professionalPageIndicator->hide(); return; }
+            if(professionalPageFade->state()!=QAbstractAnimation::Running) {
+                professionalPageFade->setStartValue(professionalPageOpacity->opacity());
+                professionalPageFade->setEndValue(0.0); professionalPageFade->start();
+            }
+            return;
+        }
+        if(!professionalPageIndicator) {
+            professionalPageIndicator=new QLabel(scroll->viewport());
+            professionalPageIndicator->setObjectName("professionalPageIndicator");
+            professionalPageIndicator->setAttribute(Qt::WA_TransparentForMouseEvents);
+            professionalPageIndicator->setFocusPolicy(Qt::NoFocus);
+            professionalPageIndicator->setStyleSheet("QLabel { color: white; background: rgba(28, 34, 44, 210); border-radius: 6px; padding: 6px 10px; font-size: 12px; }");
+            professionalPageOpacity=new QGraphicsOpacityEffect(professionalPageIndicator);
+            professionalPageIndicator->setGraphicsEffect(professionalPageOpacity);
+            professionalPageFade=new QPropertyAnimation(professionalPageOpacity,"opacity",professionalPageIndicator);
+            professionalPageFade->setDuration(200);
+            connect(professionalPageFade,&QPropertyAnimation::finished,this,[this]{ professionalPageIndicator->hide(); });
+        }
+        professionalPageFade->stop(); professionalPageOpacity->setOpacity(1.0);
+        professionalPageIndicator->setText(QString("%1 / %2").arg(pdf.pageIndex()+1).arg(pdf.pageCount()));
+        professionalPageIndicator->adjustSize();
+        const auto viewportSize=scroll->viewport()->size();
+        constexpr int margin=12;
+        professionalPageIndicator->move(
+            std::max(0,viewportSize.width()-professionalPageIndicator->width()-margin),
+            std::max(0,viewportSize.height()-professionalPageIndicator->height()-margin));
+        professionalPageIndicator->show(); professionalPageIndicator->raise();
+    }
+    void setProfessionalMode(bool enabled) {
+        if(professionalMode==enabled) return;
+        professionalMode=enabled;
+        QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+        settings.setValue("reading/professionalMode",enabled);
+        professionalPageTimeout.stop();
+        professionalLastDocument.clear();
+        professionalControlHeld=enabled && QApplication::keyboardModifiers().testFlag(Qt::ControlModifier);
+        professionalSpaceHeld=false; updateProfessionalPageIndicator();
+        updateProfessionalPageNavigation();
+        updateToolbarVisibility();
+        if(auto action=findChild<QAction*>("professionalModeAction")) {
+            QSignalBlocker blocker(action); action->setChecked(enabled);
+        }
+        installFileMenu();
+        updateOcrBar();
+        syncViewActions();
+    }
     int zoomWheelRemainder=0;
     Qt::WindowStates fullscreenRestoreState=Qt::WindowNoState;
     QRect fullscreenRestoreGeometry;
@@ -689,12 +929,12 @@ private:
     QList<QAction*> viewActions;
     QList<QAction*> goActions,shortcutMenuActions,shortcutActions;
     QMenu* goMenu=nullptr;
-    QMenu* shortcutsMenu=nullptr;
     bool navigatingHistory=false;
     bool restoringSession=false;
     QJsonArray pendingRecoveryItems;
     QTimer* checkpointTimer=nullptr;
-    QString sessionDirectory() const { QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); return QFileInfo(settings.fileName()).absolutePath()+"/recovery"; }
+    QString recoveryDirectoryOverride;
+    QString sessionDirectory() const { if(!recoveryDirectoryOverride.isEmpty()) return recoveryDirectoryOverride; QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); return QFileInfo(settings.fileName()).absolutePath()+"/recovery"; }
     void captureDocument() {
         if(activeDocument<0) return;
         auto& doc=*documents[activeDocument]; doc.path=source; doc.query=searchInput->text(); doc.mode=view->mode; doc.fit=view->fit; doc.scale=view->scale; doc.rotation=view->rotation;
@@ -753,6 +993,7 @@ private:
     PdfDocument::AnnotationCopy copiedAnnotation;
 #ifdef Q_OS_WIN
     HMENU nativeMenu=nullptr;
+    static constexpr UINT workbenchCommand=0x7700;
     static constexpr UINT fileCommandBase=0x7100;
     static constexpr UINT editCommandBase=0x7200;
     static constexpr UINT viewCommandBase=0x7300;
@@ -761,6 +1002,7 @@ private:
     static constexpr UINT helpCommandBase=0x7600;
 #endif
     QMenu* helpMenu=nullptr;
+    QAction* workbenchAction=nullptr;
     QList<QAction*> helpActions;
     UpdateManager* updates=nullptr;
 public:
@@ -797,6 +1039,10 @@ private:
             });
         }
         helpMenu->addSeparator();
+        auto howTo=helpMenu->addAction(currentUiLanguage()=="en" ? "How to use GPDF" : "Cómo utilizar GPDF");
+        howTo->setObjectName("howToUseGpdfAction");
+        helpActions.append(howTo);
+        connect(howTo,&QAction::triggered,this,[this]{ showWelcome(this); });
         auto action=helpMenu->addAction(gpdfTr("Acerca de GPDF")); action->setObjectName("aboutGpdfAction");
         helpActions.append(action); addAction(action);
         connect(action,&QAction::triggered,this,[this]{
@@ -825,7 +1071,14 @@ private:
         fileMenu->addSeparator();
         action(fileMenu,gpdfTr("Imprimir"),"printAction",[this]{ printDocument(false); },QKeySequence::Print);
         action(fileMenu,gpdfTr("Vista previa"),"printPreviewAction",[this]{ printDocument(true); });
-        action(fileMenu,gpdfTr("Abrir la carpeta contenedora"),"openFolderAction",[this]{ if(!source.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(source).absolutePath())); });
+        action(fileMenu,gpdfTr("Abrir la carpeta contenedora"),"openFolderAction",[this]{ if(!source.isEmpty()) {
+#ifdef Q_OS_WIN
+            QProcess explorer; explorer.setProgram("explorer.exe");
+            explorer.setNativeArguments(QStringLiteral("/select,\"%1\"").arg(QDir::toNativeSeparators(QFileInfo(source).absoluteFilePath()))); explorer.startDetached();
+#else
+            QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(source).absolutePath()));
+#endif
+        } });
         action(fileMenu,gpdfTr("Propiedades…"),"propertiesAction",[this]{ showProperties(); });
         fileMenu->addSeparator();
         action(fileMenu,gpdfTr("Cerrar documento"),"closeDocumentAction",[this]{ closeDocument(); },QKeySequence("Ctrl+W"));
@@ -890,8 +1143,8 @@ private:
             if(dialog.exec()==QDialog::Accepted) paintPrintedDocument(&printer);
         }
     }
-    bool closeDocument() {
-        if(!pdf.loaded() || !confirmDiscard()) return false;
+    bool closeDocument(bool transferred=false) {
+        if(!pdf.loaded() || (!transferred && !confirmDiscard())) return false;
         stopAutoScroll();
         captureDocument();
         int removed=activeDocument;
@@ -1053,7 +1306,7 @@ private:
             item->setCheckable(true); item->setProperty("rotation",i); rotationGroup->addAction(item);
         }
         viewMenu->addSeparator();
-        auto toolbar=action(viewMenu,gpdfTr("Mostrar barra de herramientas"),"toggleToolbarAction",[this](bool visible){ mainToolbar->setVisible(visible); syncViewActions(); });
+        auto toolbar=action(viewMenu,gpdfTr("Mostrar barra de herramientas"),"toggleToolbarAction",[this](bool visible){ toolbarRequestedVisible=visible; updateToolbarVisibility(); syncViewActions(); });
         toolbar->setCheckable(true); toolbar->setChecked(!mainToolbar->isHidden());
         connect(mainToolbar,&QToolBar::visibilityChanged,this,[this]{ syncViewActions(); });
         syncViewActions();
@@ -1121,7 +1374,7 @@ private:
         colors->setCurrentIndex(pencil ? 1 : 5); form->addRow(pencil ? gpdfTr("Color:") : gpdfTr("Color primario:"),colors);
         QComboBox* secondary=nullptr;
         if(!pencil) { secondary=new ViewModeCombo; secondary->setObjectName("secondaryHighlightColor"); for(int i=0;i<colors->count();++i) secondary->addItem(colors->itemIcon(i),colors->itemText(i),colors->itemData(i)); secondary->setCurrentIndex(4); form->addRow(gpdfTr("Color secundario:"),secondary); }
-        auto opacity=new QSpinBox; opacity->setObjectName(pencil ? "penOpacity" : "highlightOpacity"); opacity->setRange(5,100); opacity->setSuffix("%"); opacity->setValue(pencil ? 100 : 60); form->addRow(gpdfTr("Opacidad:"),opacity);
+        auto opacity=new QSpinBox; opacity->setObjectName(pencil ? "penOpacity" : "highlightOpacity"); opacity->setRange(5,100); opacity->setSuffix("%"); opacity->setValue(pencil ? 100 : 80); form->addRow(gpdfTr("Opacidad:"),opacity);
         auto width=new QDoubleSpinBox; width->setObjectName("penWidth"); width->setRange(0.5,12); width->setSingleStep(0.5); width->setSuffix(" pt"); width->setValue(2); if(pencil) form->addRow(gpdfTr("Grosor:"),width); else width->deleteLater();
         auto widgetAction=new QWidgetAction(menu); widgetAction->setDefaultWidget(panel); menu->addAction(widgetAction);
         auto update=[this,pencil,colors,secondary,opacity,width]{
@@ -1132,13 +1385,14 @@ private:
             updateDrawingIcons(); view->update();
         };
         QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
-        if(!pencil && !settings.value("drawing/highlightOpacity60Migrated",false).toBool()) {
-            if(settings.value("drawing/highlightOpacity",40).toInt()==40) settings.setValue("drawing/highlightOpacity",60);
-            settings.setValue("drawing/highlightOpacity60Migrated",true);
+        if(!pencil && !settings.value("drawing/highlightOpacity80Migrated",false).toBool()) {
+            const int previous=settings.value("drawing/highlightOpacity",80).toInt();
+            if(previous==40 || previous==60) settings.setValue("drawing/highlightOpacity",80);
+            settings.setValue("drawing/highlightOpacity80Migrated",true);
         }
         QColor saved=settings.value(pencil ? "drawing/penColor" : "drawing/highlightColor",pencil ? view->penColor : view->highlightColor).value<QColor>();
         for(int i=0;i<colors->count();++i) if(colors->itemData(i).value<QColor>().rgb()==saved.rgb()) colors->setCurrentIndex(i);
-        opacity->setValue(pencil ? int(std::lround(saved.alphaF()*100)) : settings.value("drawing/highlightOpacity",60).toInt());
+        opacity->setValue(pencil ? int(std::lround(saved.alphaF()*100)) : settings.value("drawing/highlightOpacity",80).toInt());
         if(pencil) width->setValue(settings.value("drawing/penWidth",2).toDouble());
         else { QColor savedSecondary=settings.value("drawing/secondaryHighlightColor",view->secondaryHighlightColor).value<QColor>(); for(int i=0;i<secondary->count();++i) if(secondary->itemData(i).value<QColor>().rgb()==savedSecondary.rgb()) secondary->setCurrentIndex(i); }
         connect(colors,&QComboBox::currentIndexChanged,this,update); connect(opacity,&QSpinBox::valueChanged,this,update); if(pencil) connect(width,&QDoubleSpinBox::valueChanged,this,update); else connect(secondary,&QComboBox::currentIndexChanged,this,update);
@@ -1231,6 +1485,8 @@ private:
         }
         viewMenu->addSeparator();
         auto dark=action(viewMenu,viewActions,gpdfTr("Modo oscuro"),"darkModeAction",[this](bool enabled){ applyDarkMode(enabled); }); dark->setCheckable(true);
+        auto professional=action(viewMenu,viewActions,gpdfTr("Modo profesional"),"professionalModeAction",[this](bool enabled){ setProfessionalMode(enabled); },"Ctrl+Shift+P");
+        professional->setCheckable(true);
         auto fullscreen=action(viewMenu,viewActions,gpdfTr("Pantalla completa"),"fullscreenAction",[this](bool enabled){ setFullscreen(enabled); },"F11"); fullscreen->setCheckable(true);
         auto tools=findChild<QToolBar*>("editingTools");
         for(bool pencil:{true,false}) { auto button=qobject_cast<QToolButton*>(tools->widgetForAction(findChild<QAction*>(pencil ? "editTool3" : "highlightAction"))); button->setMenu(drawingMenu(pencil,button)); button->setPopupMode(QToolButton::MenuButtonPopup); }
@@ -1324,10 +1580,9 @@ private:
         extra(gpdfTr("Documento siguiente"),"nextDocumentAction","Ctrl+Tab",[this]{ if(documents.size()>1) switchDocument((activeDocument+1)%int(documents.size())); });
         extra(gpdfTr("Documento anterior"),"previousDocumentAction","Ctrl+Shift+Tab",[this]{ if(documents.size()>1) switchDocument((activeDocument+int(documents.size())-1)%int(documents.size())); });
         auto confirm=extra(gpdfTr("Confirmar texto (durante edición)"),"confirmTextAction","Return",[this]{ view->finishText(); }); removeAction(confirm);
-        auto cancel=extra(gpdfTr("Cancelar / detener / salir de pantalla completa"),"cancelContextAction","Esc",[this]{ if(view->annotationDragging()) view->cancelAnnotationDrag(); else if(autoScrollTimer->isActive()) stopAutoScroll(); else if(view->commentVisible()) view->hideComment(); else if(view->findChild<QWidget*>("inlineTextEditor")) view->cancelText(); else if(isFullScreen()) { setFullscreen(false); } }); removeAction(cancel);
+        auto cancel=extra(gpdfTr("Cancelar / detener / salir de pantalla completa"),"cancelContextAction","Esc",[this]{ if(view->annotationDragging()) view->cancelAnnotationDrag(); else if(autoScrollTimer->isActive()) stopAutoScroll(); else if(view->commentVisible()) view->hideComment(); else if(view->findChild<QWidget*>("inlineTextEditor")) view->cancelText(); else if(isFullScreen()) { setFullscreen(false); } else if(professionalMode) setProfessionalMode(false); }); removeAction(cancel);
         auto enter=extra(gpdfTr("Buscar / resultado siguiente (en Búsqueda)"),"searchEnterAction","Return",[this]{ searchEnter(); }); removeAction(enter);
-        shortcutsMenu=new QMenu(gpdfTr("&Atajos"),this);
-        auto configure=extra(gpdfTr("Ver y modificar atajos…"),"configureShortcutsAction",{},[this]{ configureShortcuts(); }); shortcutsMenu->addAction(configure); shortcutMenuActions.append(configure);
+        auto configure=extra(gpdfTr("&Atajos"),"configureShortcutsAction",{},[this]{ configureShortcuts(); }); shortcutMenuActions.append(configure);
         QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.beginGroup("shortcuts");
         if(!settings.value("iconToolShortcutsMigrated",false).toBool()) {
             const QHash<QString,QString> requested={{"editTool0","F1"},{"editTool1","F2"},{"editTool2","F3"},{"editTool3","F4"},{"highlightAction","Ctrl+S"},{"secondaryHighlightAction","Ctrl+Shift+S"},{"saveFileAction","Ctrl+G"},{"saveAsFileAction","Ctrl+Shift+G"},{"goPage","Ctrl+I"}};
@@ -1400,32 +1655,38 @@ private:
         }
     }
     void configureShortcuts() {
+        auto orderedActions=shortcutActions;
+        QCollator collator(QLocale(currentUiLanguage()=="en" ? "en_US" : "es_AR"));
+        collator.setCaseSensitivity(Qt::CaseInsensitive); collator.setNumericMode(true);
+        std::stable_sort(orderedActions.begin(),orderedActions.end(),[&](QAction* a,QAction* b){
+            return collator.compare(a->text().remove('&'),b->text().remove('&'))<0;
+        });
         QDialog dialog(this); dialog.setObjectName("shortcutsDialog"); dialog.setWindowTitle(gpdfTr("Atajos de teclado")); dialog.resize(700,650);
-        auto layout=new QVBoxLayout(&dialog); layout->addWidget(new QLabel(gpdfTr("Elegir una función y presionar su nueva combinación. Un campo vacío elimina el atajo.")));
-        auto table=new QTableWidget(shortcutActions.size(),2); table->setObjectName("shortcutsTable"); table->setHorizontalHeaderLabels({gpdfTr("Función"),gpdfTr("Atajo")}); table->verticalHeader()->hide(); table->horizontalHeader()->setSectionResizeMode(0,QHeaderView::Stretch); table->horizontalHeader()->setSectionResizeMode(1,QHeaderView::ResizeToContents);
+        auto layout=new QVBoxLayout(&dialog);
+        auto table=new QTableWidget(orderedActions.size(),2); table->setObjectName("shortcutsTable"); table->setHorizontalHeaderLabels({gpdfTr("Función"),gpdfTr("Atajo")}); table->verticalHeader()->hide(); table->horizontalHeader()->setSectionResizeMode(0,QHeaderView::Stretch); table->horizontalHeader()->setSectionResizeMode(1,QHeaderView::ResizeToContents);
         QVector<QKeySequenceEdit*> editors;
-        for(int i=0;i<shortcutActions.size();++i) { auto item=new QTableWidgetItem(shortcutActions[i]->text().remove('&')); item->setFlags(item->flags() & ~Qt::ItemIsEditable); table->setItem(i,0,item); auto editor=new QKeySequenceEdit(shortcutActions[i]->shortcut()); editor->setClearButtonEnabled(true); editor->setMinimumWidth(230); editors.append(editor); table->setCellWidget(i,1,editor); }
+        for(int i=0;i<orderedActions.size();++i) { auto item=new QTableWidgetItem(orderedActions[i]->text().remove('&')); item->setFlags(item->flags() & ~Qt::ItemIsEditable); table->setItem(i,0,item); auto editor=new QKeySequenceEdit(orderedActions[i]->shortcut()); editor->setClearButtonEnabled(true); editor->setMinimumWidth(230); editors.append(editor); table->setCellWidget(i,1,editor); }
         layout->addWidget(table);
         auto buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel|QDialogButtonBox::RestoreDefaults); layout->addWidget(buttons);
-        connect(buttons->button(QDialogButtonBox::RestoreDefaults),&QPushButton::clicked,&dialog,[&]{ for(int i=0;i<editors.size();++i) editors[i]->setKeySequence(QKeySequence(shortcutActions[i]->property("defaultShortcut").toString())); });
+        connect(buttons->button(QDialogButtonBox::RestoreDefaults),&QPushButton::clicked,&dialog,[&]{ for(int i=0;i<editors.size();++i) editors[i]->setKeySequence(QKeySequence(orderedActions[i]->property("defaultShortcut").toString())); });
         connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
         connect(buttons,&QDialogButtonBox::accepted,&dialog,[&]{
             for(int i=0;i<editors.size();++i) {
                 auto key=editors[i]->keySequence();
                 if(key.count()>1) { QMessageBox::warning(&dialog,gpdfTr("Atajo inválido"),gpdfTr("Usar una sola combinación de teclas por función.")); return; }
                 for(int j=0;j<i;++j) if(!key.isEmpty() && key==editors[j]->keySequence()) {
-                    auto a=shortcutActions[i]->objectName(),b=shortcutActions[j]->objectName();
+                    auto a=orderedActions[i]->objectName(),b=orderedActions[j]->objectName();
                     if((a=="confirmTextAction" && b=="searchEnterAction") || (a=="searchEnterAction" && b=="confirmTextAction")) continue;
-                    QMessageBox::warning(&dialog,gpdfTr("Atajo repetido"),QString(gpdfTr("%1 ya está asignado a %2.")).arg(key.toString(QKeySequence::NativeText),shortcutActions[j]->text())); return; }
+                    QMessageBox::warning(&dialog,gpdfTr("Atajo repetido"),QString(gpdfTr("%1 ya está asignado a %2.")).arg(key.toString(QKeySequence::NativeText),orderedActions[j]->text())); return; }
             }
             QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.beginGroup("shortcuts");
-            for(int i=0;i<editors.size();++i) { auto action=shortcutActions[i]; action->setShortcut(editors[i]->keySequence()); settings.setValue(action->objectName(),action->shortcut().toString(QKeySequence::PortableText)); }
+            for(int i=0;i<editors.size();++i) { auto action=orderedActions[i]; action->setShortcut(editors[i]->keySequence()); settings.setValue(action->objectName(),action->shortcut().toString(QKeySequence::PortableText)); }
             updateToolTips(); installFileMenu(); dialog.accept();
         });
         dialog.exec();
     }
     void installFileMenu() {
-        if(isFullScreen()) {
+        if(isFullScreen() || professionalMode) {
 #ifdef Q_OS_WIN
             if(QApplication::platformName()=="windows") { SetMenu(reinterpret_cast<HWND>(winId()),nullptr); DrawMenuBar(reinterpret_cast<HWND>(winId())); }
 #endif
@@ -1469,7 +1730,9 @@ private:
                 if(popup) DestroyMenu(popup);
                 ok=false;
             };
-            append(fileMenu->actions(),fileMenu->title()); append(viewMenu->actions(),viewMenu->title()); append(editActions,gpdfTr("&Editar")); append(goMenu->actions(),goMenu->title()); append(shortcutsMenu->actions(),shortcutsMenu->title()); append(helpMenu->actions(),helpMenu->title());
+            append(fileMenu->actions(),fileMenu->title()); append(viewMenu->actions(),viewMenu->title()); append(editActions,gpdfTr("&Editar")); append(goMenu->actions(),goMenu->title()); if(ok) { const auto title=gpdfTr("&Atajos"); ok=AppendMenuW(root,MF_STRING,shortcutsCommandBase,reinterpret_cast<LPCWSTR>(title.utf16())); }
+            if(ok)ok=AppendMenuW(root,MF_STRING,workbenchCommand,L"Workbench");
+            append(helpMenu->actions(),helpMenu->title());
             HWND hwnd=reinterpret_cast<HWND>(winId());
             if(ok && SetMenu(hwnd,root)) { auto old=nativeMenu; nativeMenu=root; updateFileActions(); updateEditActions(); syncViewActions(); DrawMenuBar(hwnd); if(old) DestroyMenu(old); return; }
             if(root) DestroyMenu(root);
@@ -1484,7 +1747,7 @@ private:
         if(!menuBar()->actions().contains(fileMenu->menuAction())) {
             menuBar()->addMenu(fileMenu); menuBar()->addMenu(viewMenu);
             auto edit=new QMenu(gpdfTr("&Editar"),this); for(auto action:editActions) edit->addAction(action); menuBar()->addMenu(edit);
-            menuBar()->addMenu(goMenu); menuBar()->addMenu(shortcutsMenu); menuBar()->addMenu(helpMenu);
+            menuBar()->addMenu(goMenu); menuBar()->addAction(shortcutMenuActions.first()); menuBar()->addAction(workbenchAction); menuBar()->addMenu(helpMenu);
         }
     }
     QTimer* autoScrollTimer=nullptr;
@@ -1555,7 +1818,7 @@ private:
         const auto& state=*documents[activeDocument];
         const bool running=state.ocrRequested && !state.ocrComplete;
         const bool failed=!state.ocrError.isEmpty();
-        ocrToolbar->setVisible(running || failed || (ocrPolicy!=OcrPolicy::Disabled && state.ocrPrompt));
+        ocrToolbar->setVisible(!professionalMode && (running || failed || (ocrPolicy!=OcrPolicy::Disabled && state.ocrPrompt)));
         ocrApply->setVisible(state.ocrPrompt || failed);
         ocrApply->setText(failed ? ocrLabel("Reintentar OCR","Retry OCR") : ocrLabel("Aplicar OCR","Apply OCR"));
         ocrCancel->setText(running ? ocrLabel("Cancelar","Cancel") : ocrLabel("Ahora no","Not now"));
@@ -1612,6 +1875,7 @@ private:
         if(!searchInput->text().trimmed().isEmpty()) startSearch();
     }
     void processDocumentOcr() {
+        if(transferBusy || receivingTransfer) return;
         updateOcrBar();
         if(!ocrService || ocrService->busy() || activeDocument<0) return;
         std::unique_lock lock(PdfDocument::apiMutex(),std::try_to_lock);
@@ -1669,6 +1933,7 @@ private:
                 for(int i=0;i<int(documents.size());++i) if(documents[i]->id==id) { index=i; break; }
                 if(index<0) return;
                 auto& state=*documents[index]; auto& document=documentPdf(index);
+                if(transferBusy) { state.ocrNextPage=std::min(state.ocrNextPage,page); return; }
                 if(document.contentRevision()!=content || state.ocrContentRevision!=content || state.ocrGeneration!=generation || !state.ocrRequested) return;
                 if(!error.isEmpty()) { state.ocrError=error; finishDocumentOcr(index); return; }
                 for(auto& word:words) {
@@ -1720,6 +1985,37 @@ private:
     bool changingTabs=false;
     QToolBar* documentToolbar=nullptr;
     QTabBar* documentTabs=nullptr;
+    void detachDocument(int index) {
+        if(transferBusy || receivingTransfer || !switchDocument(index) || !view->finishText() || !saveSession()) return;
+        QDir root(sessionDirectory()); auto manifest=SessionStore::read(root);
+        auto items=manifest["documents"].toArray();
+        if(index<0 || index>=items.size()) return;
+        auto item=items[index].toObject();
+        QDir detached(root.filePath("windows/"+QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        if(!QDir().mkpath(detached.absolutePath())) return;
+        auto backup=item["backup"].toString();
+        if(!backup.isEmpty() && !QFile::copy(root.filePath(backup),detached.filePath(backup))) return;
+        manifest["documents"]=QJsonArray{item}; manifest["active"]=0;
+        manifest["activeId"]=item["id"]; manifest["clean"]=false;
+        if(!SessionStore::write(detached,manifest)) return;
+        if(!QProcess::startDetached(QCoreApplication::applicationFilePath(),{"--detached-session="+detached.absolutePath()})) return;
+        // Keep the original document until the receiving process has restored it.
+        transferBusy=true; setEnabled(false);
+        showDocumentTransferProgress(ocrLabel("Abriendo otra ventana…","Opening another window…"));
+        auto timer=new QTimer(this); timer->setInterval(100);
+        auto elapsed=std::make_shared<int>(0);
+        connect(timer,&QTimer::timeout,this,[this,timer,elapsed,detached]{
+            *elapsed+=timer->interval();
+            if(QFileInfo::exists(detached.filePath("ready"))) {
+                timer->stop(); timer->deleteLater(); clearDocumentDragFeedback(); transferBusy=false; setEnabled(true); closeDocument(true);
+                if(documents.empty() && deferredExternalOpens.isEmpty()) close(); else resumeAfterDocumentTransfer();
+            } else if(*elapsed>=15000) {
+                timer->stop(); timer->deleteLater(); resumeAfterDocumentTransfer();
+                importantWarning(ocrLabel("No se pudo confirmar la apertura de la nueva ventana. El documento sigue abierto aquí.","The new window could not be confirmed. The document is still open here."));
+            }
+        });
+        timer->start();
+    }
     void moveDocument(int from,int to) {
         if(from==to || from<0 || to<0 || from>=int(documents.size()) || to>=int(documents.size())) return;
         // The active PDF lives outside DocumentState; preserve its identity when indices move.
@@ -1739,7 +2035,16 @@ private:
             bool dirty=i==activeDocument ? pdf.dirty() : doc.stored.dirty();
             documentTabs->setTabText(i,QFileInfo(path).fileName()+(dirty ? " *" : "")); documentTabs->setTabToolTip(i,path);
         }
-        documentTabs->setCurrentIndex(activeDocument); documentToolbar->setVisible(documents.size()>=2);
+        documentTabs->setCurrentIndex(activeDocument);
+        for(int i=0;i<documentTabs->count();++i) {
+            for(auto side:{QTabBar::LeftSide,QTabBar::RightSide}) {
+                if(auto button=documentTabs->tabButton(i,side)) {
+                    button->setEnabled(i==activeDocument);
+                    button->setVisible(i==activeDocument);
+                }
+            }
+        }
+        documentToolbar->setVisible(documents.size()>1);
     }
     void storeDocument() {
         if(activeDocument<0) return;
@@ -1765,6 +2070,12 @@ private:
     QComboBox* annotationScope;
     QComboBox* annotationTypeFilter;
     QScrollArea* scroll;
+    QLabel* fileDropHint=nullptr;
+    void positionFileDropHint() {
+        auto viewport=scroll->viewport();
+        const QPoint center=viewport->mapTo(this,viewport->rect().center());
+        fileDropHint->move(center-QPoint(fileDropHint->width()/2,fileDropHint->height()/2));
+    }
     QPushButton* editButton;
     QPushButton* colorButton;
     QPushButton* deleteButton;
@@ -2125,8 +2436,8 @@ private:
     QVector<PdfDocument::AnnotationEntry> panelEntries;
     QVector<PdfDocument::AnnotationEntry> annotationsForPanel() {
         if(annotationScope->currentIndex()==1) return pdf.pageAnnotations(pdf.pageIndex());
-        if(pdf.pageCount()<=50) return pdf.documentAnnotations();
         if(!togglePanel->isChecked()) return pdf.pageAnnotations(pdf.pageIndex());
+        if(pdf.pageCount()<=50) return pdf.documentAnnotations();
         quint64 revision=pdf.revision();
         if(annotationsRevision!=revision) { annotationsRevision=revision; annotationsBusy=false; panelEntries=pdf.pageAnnotations(pdf.pageIndex()); }
         if(!annotationsBusy) {
@@ -2155,8 +2466,10 @@ private:
             }
         }
         updateGoActions();
-        { QSignalBlocker pageBlocker(pageNumber); pageNumber->setEnabled(pdf.loaded()); pageNumber->setSpecialValueText(pdf.loaded() ? QString() : QStringLiteral(" ")); pageNumber->setRange(1,std::max(1,pdf.pageCount())); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); }
-        pageLabel->setText(pdf.loaded() ? QString("/ %1  ").arg(pdf.pageCount()) : QString());
+        updateToolbarVisibility();
+        { QSignalBlocker pageBlocker(pageNumber); pageNumber->setEnabled(pdf.loaded()); pageNumber->setRange(1,std::max(1,pdf.pageCount())); pageNumber->setValue(pdf.loaded() ? pdf.pageIndex()+1 : 1); }
+        pageLabel->setText(QString("/ %1  ").arg(pdf.pageCount()));
+        updateProfessionalPageNavigation();
         QSignalBlocker blocker(annotations);
         auto entries=annotationsForPanel();
         auto normalized=[](QString value){ QString result; for(auto c:value.toCaseFolded().normalized(QString::NormalizationForm_D)) if(c.category()!=QChar::Mark_NonSpacing) result+=c; return result; };

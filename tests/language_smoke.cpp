@@ -19,6 +19,7 @@ int main(int argc,char** argv) {
             Window restarted;
             require(restarted.findChild<QAction*>("saveAsFileAction")->shortcut()==QKeySequence(args[3]=="en" ? "Ctrl+Shift+S" : "Ctrl+Shift+G"),"default shortcuts follow language after restart");
             require(restarted.findChild<QAction*>("focusSearch")->shortcut()==QKeySequence("Ctrl+Alt+F"),"custom shortcut survives language restart");
+            require(restarted.findChild<QAction*>("workbenchAction")->shortcut()==QKeySequence("Ctrl+Alt+W"),"custom Workbench shortcut survives restart");
             return 0;
         }
         QTemporaryDir directory; require(directory.isValid(),"isolated settings directory");
@@ -28,6 +29,7 @@ int main(int argc,char** argv) {
         require(initializeUiLanguage(language),"installer initializes language");
         require(initializeUiLanguage(english ? "es" : "en") && savedUiLanguage()==language,"upgrade preserves preferred language");
         QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
+        settings.setValue("drawing/highlightOpacity",english ? 35 : 60);
         settings.setValue("shortcuts/focusSearch","Ctrl+Alt+F");
         settings.setValue("shortcuts/toggleAnnotations","Ctrl+A");
         settings.setValue("shortcuts/underlineAction","");
@@ -35,6 +37,104 @@ int main(int argc,char** argv) {
         settings.setValue("shortcuts/rotateClockwiseAction","R");
         settings.setValue("shortcuts/saveFileAction","Ctrl+Alt+G"); settings.sync();
         Window window; window.show(); app.processEvents();
+        require(window.findChild<QSpinBox*>("highlightOpacity")->value()==(english ? 35 : 80),"highlight default migrates while custom opacity is preserved");
+        auto professional=window.findChild<QAction*>("professionalModeAction");
+        auto tools=window.findChild<QToolBar*>("mainToolbar");
+        auto documents=window.findChild<QToolBar*>("documentToolbar");
+        require(professional && professional->text()==(english ? "Professional mode" : "Modo profesional"),"professional mode translated");
+        require(professional->shortcut()==QKeySequence("Ctrl+Shift+P"),"professional mode has exit shortcut");
+        const auto flags=window.windowFlags();
+        professional->trigger(); app.processEvents();
+        require(professional->isChecked() && tools->isHidden() && documents->isHidden() && window.menuBar()->isHidden(),"professional mode hides tools and menus without empty tab bar");
+        require(window.windowFlags()==flags && !window.isFullScreen(),"professional mode preserves ordinary window frame");
+#ifdef Q_OS_WIN
+        if(QApplication::platformName()=="windows") require(!GetMenu(reinterpret_cast<HWND>(window.winId())),"professional mode detaches native menu");
+#endif
+        const auto first=directory.filePath("professional-first.pdf"),second=directory.filePath("professional-second.pdf");
+        { PdfDocument sample; require(sample.createSample(3) && sample.saveCopy(first) && sample.saveCopy(second),"professional mode fixtures"); }
+        window.openDocument(first); require(documents->isHidden(),"single document needs no tab bar");
+        window.openDocument(second); require(!documents->isHidden() && tools->isHidden(),"multiple documents retain tab bar in professional mode");
+        window.findChild<QAction*>("closeDocumentAction")->trigger();
+        require(documents->isHidden() && professional->isChecked(),"closing second document hides tab bar");
+        auto sendKey=[&](QEvent::Type type,int code,bool repeat=false) {
+            QKeyEvent key(type,code,Qt::NoModifier,QString(),repeat); QApplication::sendEvent(&window,&key);
+        };
+        auto settleFade=[&] { QEventLoop loop; QTimer::singleShot(280,&loop,&QEventLoop::quit); loop.exec(); };
+        sendKey(QEvent::KeyPress,Qt::Key_Control);
+        auto indicator=window.findChild<QLabel*>("professionalPageIndicator");
+        require(indicator && !indicator->isHidden() && indicator->text()=="1 / 3","Ctrl reveals current and total page count");
+        require(indicator->parentWidget()->width()-indicator->x()-indicator->width()==12
+                && indicator->parentWidget()->height()-indicator->y()-indicator->height()==12,
+                "page hint sits at bottom right");
+        window.findChild<QAction*>("goNext")->trigger();
+        require(indicator->text()=="2 / 3","held hint updates on navigation");
+        sendKey(QEvent::KeyPress,Qt::Key_Space);
+        sendKey(QEvent::KeyRelease,Qt::Key_Control); settleFade();
+        require(!indicator->isHidden(),"Space keeps hint visible after releasing Ctrl");
+        sendKey(QEvent::KeyRelease,Qt::Key_Space,true); settleFade();
+        require(!indicator->isHidden(),"autorepeat release does not hide hint");
+        sendKey(QEvent::KeyRelease,Qt::Key_Space);
+        require(!indicator->isHidden(),"key release starts a fade instead of abruptly hiding");
+        sendKey(QEvent::KeyPress,Qt::Key_Control); settleFade();
+        require(!indicator->isHidden(),"pressing during fade keeps hint visible");
+        sendKey(QEvent::KeyRelease,Qt::Key_Control); settleFade();
+        require(indicator->isHidden(),"hint disappears after fading");
+        sendKey(QEvent::KeyPress,Qt::Key_Control);
+        QEvent deactivated(QEvent::WindowDeactivate); QApplication::sendEvent(&window,&deactivated); settleFade();
+        require(indicator->isHidden(),"lost focus clears held keys");
+        window.findChild<QAction*>("goNext")->trigger();
+        require(!indicator->isHidden() && indicator->text()=="3 / 3","navigation alone briefly shows the page indicator");
+        QEventLoop navigationHint;
+        QTimer::singleShot(1100,&navigationHint,&QEventLoop::quit);
+        navigationHint.exec();
+        require(indicator->isHidden(),"navigation hint fades without a key release");
+        QLineEdit editor(&window); editor.setText("a");
+        QKeyEvent typedSpace(QEvent::KeyPress,Qt::Key_Space,Qt::NoModifier," "); QApplication::sendEvent(&editor,&typedSpace);
+        require(editor.text()=="a " && indicator->isHidden(),"space still types in text controls");
+        auto fullscreen=window.findChild<QAction*>("fullscreenAction");
+        fullscreen->trigger(); fullscreen->trigger(); app.processEvents();
+        require(professional->isChecked() && tools->isHidden() && window.menuBar()->isHidden(),"fullscreen roundtrip retains professional mode");
+        auto dark=window.findChild<QAction*>("darkModeAction"); dark->trigger(); app.processEvents();
+        require(window.menuBar()->isHidden(),"theme change cannot reveal professional menu");
+        dark->trigger();
+        QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier); QApplication::sendEvent(&window,&escape);
+        require(!professional->isChecked() && !tools->isHidden(),"Escape restores tools");
+        auto toolbarToggle=window.findChild<QAction*>("toggleToolbarAction");
+        toolbarToggle->trigger(); professional->trigger(); professional->trigger();
+        require(tools->isHidden(),"professional mode preserves manually hidden toolbar");
+        toolbarToggle->trigger(); window.findChild<QAction*>("closeDocumentAction")->trigger();
+        auto workbench=window.findChild<QAction*>("workbenchAction");
+        require(workbench->shortcut()==QKeySequence("Ctrl+Shift+W"),"Workbench default shortcut");
+        bool workbenchOpened=false;
+        QTimer::singleShot(0,[&]{ if(auto dialog=window.findChild<QDialog*>("workbenchDialog")) { workbenchOpened=true; dialog->reject(); } });
+        QKeyEvent workbenchKey(QEvent::KeyPress,Qt::Key_W,Qt::ControlModifier|Qt::ShiftModifier); QApplication::sendEvent(&window,&workbenchKey);
+        require(workbenchOpened,"Workbench opens through its keyboard shortcut");
+        bool sorted=true,edited=false;
+        QTimer::singleShot(0,[&]{
+            auto dialog=window.findChild<QDialog*>("shortcutsDialog"); if(!dialog) return;
+            auto table=dialog->findChild<QTableWidget*>("shortcutsTable");
+            QCollator collator(QLocale(english ? "en_US" : "es_AR")); collator.setCaseSensitivity(Qt::CaseInsensitive); collator.setNumericMode(true);
+            for(int row=0;row<table->rowCount();++row) {
+                if(row && collator.compare(table->item(row-1,0)->text(),table->item(row,0)->text())>0) sorted=false;
+                if(table->item(row,0)->text()=="Workbench") {
+                    auto edit=qobject_cast<QKeySequenceEdit*>(table->cellWidget(row,1)); edit->setKeySequence(QKeySequence("Ctrl+Alt+W")); edited=true;
+                }
+            }
+            dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+        });
+        window.findChild<QAction*>("configureShortcutsAction")->trigger();
+        require(sorted && edited && workbench->shortcut()==QKeySequence("Ctrl+Alt+W"),"localized sorted rows save the correct shortcut action");
+        bool defaultRestored=false;
+        QTimer::singleShot(0,[&]{
+            auto dialog=window.findChild<QDialog*>("shortcutsDialog"); if(!dialog) return;
+            dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::RestoreDefaults)->click();
+            auto table=dialog->findChild<QTableWidget*>("shortcutsTable");
+            for(int row=0;row<table->rowCount();++row) if(table->item(row,0)->text()=="Workbench")
+                defaultRestored=qobject_cast<QKeySequenceEdit*>(table->cellWidget(row,1))->keySequence()==QKeySequence("Ctrl+Shift+W");
+            dialog->reject();
+        });
+        window.findChild<QAction*>("configureShortcutsAction")->trigger();
+        require(defaultRestored && workbench->shortcut()==QKeySequence("Ctrl+Alt+W"),"restore defaults uses sorted mapping and cancel preserves customization");
         require(currentUiLanguage()==language,"startup language applied");
         require(window.findChild<QAction*>("openFileAction")->text()==(english ? "Open" : "Abrir"),"file menu translation");
         require(window.findChild<QAction*>("highlightAction")->text()==(english ? "Highlight" : "Resaltar"),"tool translation");
@@ -68,8 +168,11 @@ int main(int argc,char** argv) {
 #ifdef Q_OS_WIN
         if(QApplication::platformName()=="windows") {
             auto menu=GetMenu(reinterpret_cast<HWND>(window.winId())); wchar_t text[64]{};
-            require(menu && GetMenuItemCount(menu)==6,"native menu count");
-            GetMenuStringW(menu,5,text,64,MF_BYPOSITION);
+            require(menu && GetMenuItemCount(menu)==7,"native menu count");
+            require(!GetSubMenu(menu,4),"Shortcuts is a direct native button");
+            require(!GetSubMenu(menu,5),"Workbench is a direct native button");
+            GetMenuStringW(menu,5,text,64,MF_BYPOSITION);require(QString::fromWCharArray(text)=="Workbench","Workbench name is identical in both languages");
+            GetMenuStringW(menu,6,text,64,MF_BYPOSITION);
             require(QString::fromWCharArray(text)==(english ? "&Help" : "&Ayuda"),"native Help translation");
         }
 #endif

@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
             auto text=pdf.pageText(0); int first=text.indexOf("Analista de siniestros con"),last=text.indexOf("traduzco",first)+6;
             require(first>=0 && last>first,"find probe line"); int pieces=pdf.selectionRects(first,last).size();
             require(pdf.highlight(first,last),"highlight probe line"); auto copy=pdf.copyAnnotation(pdf.annotationCount()-1);
-            std::cout<<"Original line rectangles: "<<pieces<<"; highlight quadrilaterals: "<<copy.quads.size()<<"\n";
+            std::cout<<"Selection rectangles: "<<pieces<<"; highlight quadrilaterals: "<<copy.quads.size()<<"\n";
             require(copy.quads.size()==1,"fragmented real PDF line has continuous highlight");
             auto bounds=copy.rect; require(pdf.render(1.75).save(app.arguments()[3]),"save highlight visual probe");
             require(pdf.undo() && pdf.redo(),"probe undo redo"); return 0;
@@ -272,10 +272,10 @@ int main(int argc, char** argv) {
             bytes+="trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n"+QByteArray::number(xref)+"\n%%EOF\n";
             QFile fixture(directory+"/fragmented-lines.pdf"); require(fixture.open(QIODevice::WriteOnly) && fixture.write(bytes)==bytes.size(),"write fragmented text fixture"); fixture.close();
             PdfDocument geometry; require(geometry.open(fixture.fileName()),"open fragmented text fixture");
-            int last=geometry.characterCount()-1; require(geometry.selectionRects(0,last).size()>3,"PDFium splits font runs in fixture");
+            int last=geometry.characterCount()-1; require(geometry.selectionRects(0,last).size()==3,"selection joins nearby font runs and keeps columns and lines separate");
             require(geometry.highlight(0,last),"highlight fragmented text"); auto copy=geometry.copyAnnotation(0);
             require(copy.quads.size()==3,"highlight merges adjacent runs but keeps columns and lines separate");
-            require(copy.color.alpha()==153,"default highlight alpha is sixty percent");
+            require(copy.color.alpha()==204,"default highlight alpha is eighty percent");
             require(geometry.saveCopy(directory+"/fragmented-highlighted.pdf") && geometry.open(directory+"/fragmented-highlighted.pdf") && geometry.copyAnnotation(0).quads.size()==3,"continuous highlight geometry persists");
         }
         {

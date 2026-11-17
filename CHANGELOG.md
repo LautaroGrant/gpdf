@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 — November 17, 2026
+
+- Added Workbench. A set of tools to merge, split, remove, extract, and organize PDF pages, and export searchable PDFs with OCR.
+- Added Professional mode for a more minimalist UI experience.
+- Improved startup and neighboring-page rendering performance.
+
 ## 0.3.3 - November 2, 2026
 
 - Click PDF hyperlinks to open HTTP/HTTPS URLs and email links, or navigate to internal PDF destinations. 
@@ -33,12 +39,10 @@
 
 - Implementation of standalone eraser button. Removes highlights, underlines, and ink strokes with the existing undo support.
 - Automatic checks for stable updates on GitHub Releases, manual checks from Help, an automatic-check preference, and the option to skip a version.
-- Installer downloads with SHA-256 verification, progress, and cancellation. Updates use the normal prompts for unsaved documents before closing GPDF and opening the installer. Portable copies open the download page.
 - PDF pages render at the monitor's physical resolution, and the render cache refreshes when display scaling changes.
 - Page images and edges align to physical pixels to avoid additional resampling, including at fractional display scales and with 90° rotations.
 - The bottom overview bar is hidden to provide more reading space.
 - Middle-click autoscroll also moves horizontally when the document is wider than the viewport.
-- The rotation button has an icon and rotates pages clockwise in 90° increments with Ctrl+R in both languages.
 - Normal shutdown no longer restores the previous documents on the next launch. Recovery of unsaved changes after unexpected interruptions remains available.
 - Fix: Reopening an existing PDF checks its contents and reloads it if it changed externally, with a prompt for unsaved annotations.
 - Fix: Single-key shortcuts respect typing in annotations, comments, search boxes, and other input fields.

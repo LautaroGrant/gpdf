@@ -393,6 +393,27 @@ int main(int argc,char** argv) {
         {
             const auto external=directory.path()+"/external.pdf";
             PdfDocument original; require(original.createSample(1) && original.saveCopy(external),"external replacement fixture");
+            {
+                Window target; target.show(); app.processEvents();
+                auto hint=target.findChild<QLabel*>("fileDropHint");
+                QMimeData invalid; invalid.setUrls({QUrl("https://example.com/file.pdf"),QUrl::fromLocalFile(directory.path())});
+                QDragEnterEvent rejected(QPoint(30,30),Qt::CopyAction,&invalid,Qt::LeftButton,Qt::NoModifier);
+                QApplication::sendEvent(&target,&rejected);
+                require(!rejected.isAccepted() && hint->isHidden(),"invalid file drag keeps the hint hidden");
+                QMimeData files; files.setUrls({QUrl::fromLocalFile(external),QUrl::fromLocalFile(external)});
+                auto drop=[&](QWidget* surface) {
+                    QDragEnterEvent enter(QPoint(30,30),Qt::CopyAction|Qt::MoveAction,&files,Qt::LeftButton,Qt::NoModifier);
+                    QApplication::sendEvent(surface,&enter);
+                    require(enter.isAccepted() && enter.dropAction()==Qt::CopyAction,"local PDF drag is accepted as copy");
+                    require(hint->isVisible(),"local PDF drag shows the drop hint");
+                    QDropEvent event(QPointF(30,30),Qt::CopyAction|Qt::MoveAction,&files,Qt::LeftButton,Qt::NoModifier);
+                    QApplication::sendEvent(surface,&event); app.processEvents();
+                    require(hint->isHidden(),"drop hides the hint");
+                    require(event.isAccepted() && target.findChild<QTabBar*>("documentTabs")->count()==1,"PDF drop opens one document without duplicate tabs");
+                };
+                drop(target.findChild<QScrollArea*>()->viewport());
+                drop(&target);
+            }
             Window reader; reader.openDocument(external);
             PageView* canvas=nullptr;
             for(auto widget:reader.findChildren<QWidget*>()) if(auto candidate=dynamic_cast<PageView*>(widget)) canvas=candidate;
@@ -514,20 +535,20 @@ int main(int argc,char** argv) {
             Window home;
             auto number=home.findChild<QSpinBox*>("pageNumber");
             auto total=home.findChild<QLabel*>("pageTotal");
-            require(number && total && number->text().trimmed().isEmpty() && total->text().isEmpty() && !number->isEnabled(),"empty home page indicator");
+            require(number && total && home.findChild<QToolBar*>("mainToolbar")->isHidden(),"empty home hides toolbar");
             const auto emptySize=number->parentWidget()->sizeHint();
             PdfDocument sample; require(sample.createSample(3),"page indicator sample");
             const auto path=directory.filePath("page-indicator.pdf");
             require(sample.saveCopy(path),"save page indicator sample");
             for(int pass=0;pass<2;++pass) {
                 home.openDocument(path);
-                require(number->isEnabled() && number->text()=="1" && total->text().trimmed()=="/ 3","restore page indicator on open");
+                require(!home.findChild<QToolBar*>("mainToolbar")->isHidden() && number->isEnabled() && number->text()=="1" && total->text().trimmed()=="/ 3","restore toolbar and page indicator on open");
                 require(number->parentWidget()->sizeHint()==emptySize,"page indicator keeps layout space");
                 number->setValue(2);
                 require(number->text()=="2","page navigation remains editable");
                 number->setValue(1);
                 home.findChild<QAction*>("closeDocumentAction")->trigger();
-                require(!number->isEnabled() && number->text().trimmed().isEmpty() && total->text().isEmpty(),"clear page indicator after closing last file");
+                require(home.findChild<QToolBar*>("mainToolbar")->isHidden(),"hide toolbar after closing last file");
                 require(number->parentWidget()->sizeHint()==emptySize,"empty indicator preserves layout after close");
             }
         }
@@ -554,7 +575,7 @@ int main(int argc,char** argv) {
         }
 
         for(auto button:window.findChildren<QPushButton*>()) require(button->text()!="Aplicar a la anotación seleccionada","drawing menus omit apply-to-selected action");
-        require(window.findChild<QSpinBox*>("highlightOpacity")->value()==60,"default highlight opacity is sixty percent");
+        require(window.findChild<QSpinBox*>("highlightOpacity")->value()==80,"default highlight opacity is eighty percent");
         {
             QDialog nativeContainer(&window);
             nativeContainer.setAttribute(Qt::WA_DontShowOnScreen);
@@ -611,8 +632,9 @@ int main(int argc,char** argv) {
 #ifdef Q_OS_WIN
         if(QApplication::platformName()=="windows") {
             auto native=GetMenu(reinterpret_cast<HWND>(window.winId()));
-            require(native && GetMenuItemCount(native)==6,"native menus include Help as last menu");
-            wchar_t helpTitle[32]{}; GetMenuStringW(native,5,helpTitle,32,MF_BYPOSITION);
+            require(native && GetMenuItemCount(native)==7,"native menus include Workbench and Help as last menu");
+            require(!GetSubMenu(native,5),"Workbench opens directly without a dropdown");
+            wchar_t helpTitle[32]{}; GetMenuStringW(native,6,helpTitle,32,MF_BYPOSITION);
             require(QString::fromWCharArray(helpTitle)=="&Ayuda","Help is the last native menu");
             auto popup=GetSubMenu(native,0);
             require(popup && GetMenuItemCount(popup)==14,"native file menu sections available");
@@ -920,6 +942,8 @@ int main(int argc,char** argv) {
             require(view->pdf.pageIndex()==0,"left arrow navigates in each view");
         }
         require(window.findChild<QTimer*>("searchDebounce")->interval()==600,"automatic search waits 0.6 seconds");
+        // Document-wide annotation discovery is deferred while the panel is hidden.
+        window.findChild<QAction*>("toggleAnnotations")->setChecked(true);
         scope->setCurrentIndex(0);
         int noteOnSecond=-1;
         for(int row=0;row<list->count();++row) {
@@ -964,7 +988,20 @@ int main(int argc,char** argv) {
         const QStringList panelNames={"Búsqueda","Anotaciones","Miniaturas","Marcadores del PDF","Marcadores personales"};
         require(menuItems[toolbarIndex+1]->isSeparator(),"View panel section follows toolbar section");
         for(int i=0;i<panelNames.size();++i) require(menuItems[toolbarIndex+2+i]->text()==panelNames[i],"View panels are in requested order");
-        require(menuItems[toolbarIndex+7]->isSeparator() && menuItems[toolbarIndex+8]->text()=="Modo oscuro" && menuItems[toolbarIndex+9]->text()=="Pantalla completa" && menuItems.size()==toolbarIndex+10,"View ends with separate dark and fullscreen section");
+        require(menuItems[toolbarIndex+7]->isSeparator() && menuItems[toolbarIndex+8]->text()=="Modo oscuro" && menuItems[toolbarIndex+9]->objectName()=="professionalModeAction" && menuItems[toolbarIndex+10]->text()=="Pantalla completa" && menuItems.size()==toolbarIndex+11,"View ends with dark, professional and fullscreen modes");
+        {
+            auto professional=window.findChild<QAction*>("professionalModeAction");
+            professional->trigger();
+            {
+                Window restored;
+                require(restored.findChild<QAction*>("professionalModeAction")->isChecked(),"professional mode restored in a new window");
+                require(!restored.findChild<QAction*>("toggleToolbarAction")->isEnabled(),"restored professional mode disables toolbar toggle");
+            }
+            professional->trigger();
+            Window restored;
+            require(!restored.findChild<QAction*>("professionalModeAction")->isChecked(),"disabled professional mode restored in a new window");
+            require(restored.findChild<QToolBar*>("mainToolbar")->isHidden(),"empty normal window keeps toolbar hidden");
+        }
         window.findChild<QAction*>("searchAction")->setChecked(false); find->trigger(); require(!searchPanel->isHidden(),"View Search opens panel");
         find->trigger(); require(searchPanel->isHidden(),"Ctrl F closes open search panel");
         find->trigger(); require(!searchPanel->isHidden(),"Ctrl F reopens closed search panel");
@@ -1132,7 +1169,7 @@ int main(int argc,char** argv) {
         require(results->item(0)==nullptr,"new document clears results");
         auto tabs=window.findChild<QTabBar*>("documentTabs");
         auto tabsToolbar=window.findChild<QToolBar*>("documentToolbar");
-        require(tabs && tabs->count()==1 && tabsToolbar->isHidden(),"one document hides tabs");
+        require(tabs && tabs->count()==1 && tabsToolbar->isHidden(),"one document hides document tabs");
         QString second=directory.path()+"/second.pdf";
         { PdfDocument document; require(document.createSample(2),"second fixture"); require(document.saveCopy(second),"save second fixture"); }
         view->pdf.setPage(2); view->refresh();
@@ -1349,7 +1386,7 @@ int main(int argc,char** argv) {
         view->cancelText();
         save->trigger();
         window.findChild<QAction*>("closeDocumentAction")->trigger(); app.processEvents();
-        require(tabs->count()==1 && tabsToolbar->isHidden() && view->pdf.pageCount()==5,"close tab returns remaining document");
+        require(tabs->count()==1 && tabsToolbar->isHidden() && view->pdf.pageCount()==5,"closing to one document hides document tabs");
         save->trigger();
         window.findChild<QAction*>("closeDocumentAction")->trigger();
         require(tabs->count()==0 && !view->pdf.loaded(),"close last tab returns start");
@@ -1364,7 +1401,8 @@ int main(int argc,char** argv) {
         require(window.findChild<QListWidget*>("annotationList")->count()==1,"large document annotations indexed in background");
         searchInput->setText("Page"); QMetaObject::invokeMethod(searchInput,"returnPressed"); window.openDocument(second); app.processEvents();
         require(results->count()==0 && view->pdf.pageCount()==2,"switching document cancels stale search jobs");
-        QString bookmarksFile=QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("../tests/data/bookmarks.pdf");
+        QString bookmarksFile=QString(GPDF_SOURCE_DIR)+"/tests/data/bookmarks.pdf";
+        require(QFileInfo::exists(bookmarksFile),"bookmark fixture exists independently of executable output directory");
         window.openDocument(bookmarksFile); window.findChild<QAction*>("showBookmarksAction")->trigger(); app.processEvents();
         auto bookmarkTree=window.findChild<QTreeWidget*>("documentBookmarks");
         require(bookmarkTree->topLevelItemCount()==2 && bookmarkTree->topLevelItem(0)->childCount()==1,"native PDF bookmark hierarchy");
@@ -1390,7 +1428,7 @@ int main(int argc,char** argv) {
         require(view->pdf.pageIndex()==0 && thumbnailResets==0,"repeated navigation retains the thumbnail model");
         auto primaryHighlight=window.findChild<QAction*>("highlightAction"); auto secondaryHighlight=window.findChild<QAction*>("secondaryHighlightAction");
         require(primaryHighlight->shortcut()==QKeySequence("Ctrl+S") && secondaryHighlight->shortcut()==QKeySequence("Ctrl+Shift+S"),"two highlight shortcuts");
-        require(view->highlightColor.alpha()==153 && view->secondaryHighlightColor.alpha()==153,"sixty percent highlight opacity");
+        require(view->highlightColor.alpha()==204 && view->secondaryHighlightColor.alpha()==204,"eighty percent highlight opacity");
         require(view->secondaryHighlightColor.rgb()==QColor("#e88810").rgb(),"secondary defaults orange");
         view->first=0; view->last=5; int beforePrimary=view->pdf.annotationCount(); view->setFocus();
         QKeyEvent primaryKey(QEvent::KeyPress,Qt::Key_S,Qt::ControlModifier); QApplication::sendEvent(view,&primaryKey);
@@ -1422,7 +1460,7 @@ int main(int argc,char** argv) {
         require(darkPixels>100,"zoom retains previous page rendering while replacement is pending");
         previewGuard.unlock();
         auto unmodified=view->pdf.render(1); auto dark=window.findChild<QAction*>("darkModeAction"); dark->trigger(); require(view->darkMode && view->pdf.render(1)==unmodified,"dark mode only changes display"); snapshot("study-dark");
-        require(!window.menuBar()->isHidden() && window.menuBar()->actions().size()==6,"dark menu bar exposes all six menus");
+        require(!window.menuBar()->isHidden() && window.menuBar()->actions().size()==7,"dark menu bar exposes six menus and the direct Workbench action");
 #ifdef Q_OS_WIN
         if(QApplication::platformName()=="windows") require(GetMenu(reinterpret_cast<HWND>(window.winId()))==nullptr,"dark mode replaces native menu with themed Qt menu");
 #endif
@@ -1895,6 +1933,27 @@ int main(int argc,char** argv) {
             auto search=reader.findChild<QAction*>("searchAction"); search->setChecked(false); canvas->setFocus();
             QKeyEvent searchKey(QEvent::KeyPress,Qt::Key_B,Qt::ControlModifier); QApplication::sendEvent(canvas,&searchKey); require(search->isChecked(),"Ctrl+B opens search panel");
             reader.openDocument(directory.path()+"/ui.pdf"); app.processEvents(); auto tabs=reader.findChild<QTabBar*>("documentTabs"); require(tabs->count()==2,"middle close fixture has two documents");
+            search->setChecked(false); canvas->setFocus();
+            auto scroller=reader.findChild<QScrollArea*>();
+            for(auto bar:{scroller->verticalScrollBar(),scroller->horizontalScrollBar()}) {
+                bar->setRange(0,2000); bar->setPageStep(600); bar->setSingleStep(20); bar->setValue(1000);
+            }
+            for(auto key:{Qt::Key_Down,Qt::Key_Up,Qt::Key_Right,Qt::Key_Left}) {
+                const bool horizontal=key==Qt::Key_Right || key==Qt::Key_Left;
+                auto bar=horizontal ? scroller->horizontalScrollBar() : scroller->verticalScrollBar();
+                int before=bar->value();
+                QKeyEvent pan(QEvent::KeyPress,key,Qt::ControlModifier); QApplication::sendEvent(canvas,&pan);
+                require(std::abs(bar->value()-before)>bar->singleStep(),"Ctrl arrow pans faster than one step");
+                require((bar->value()>before)==(key==Qt::Key_Down || key==Qt::Key_Right),"Ctrl arrow pan direction");
+            }
+            auto documentBar=static_cast<DocumentTabBar*>(tabs);
+            auto detachHandler=documentBar->detachRequested;
+            int detached=-1; documentBar->detachRequested=[&](int index,QPoint){ detached=index; };
+            auto dragPoint=tabs->tabRect(1).center(); auto outside=QPoint(dragPoint.x(),tabs->height()+60);
+            QMouseEvent dragDown(QEvent::MouseButtonPress,dragPoint,tabs->mapToGlobal(dragPoint),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(tabs,&dragDown);
+            QMouseEvent dragUp(QEvent::MouseButtonRelease,outside,tabs->mapToGlobal(outside),Qt::LeftButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(tabs,&dragUp);
+            require(detached==1 && tabs->count()==2,"drag outside requests detachment without prematurely closing tab");
+            documentBar->detachRequested=detachHandler;
             auto point=tabs->tabRect(1).center();
             QMouseEvent down(QEvent::MouseButtonPress,point,tabs->mapToGlobal(point),Qt::MiddleButton,Qt::MiddleButton,Qt::NoModifier); QApplication::sendEvent(tabs,&down);
             QMouseEvent up(QEvent::MouseButtonRelease,point,tabs->mapToGlobal(point),Qt::MiddleButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(tabs,&up);

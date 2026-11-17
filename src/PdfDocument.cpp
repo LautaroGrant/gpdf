@@ -253,7 +253,7 @@ QImage PdfDocument::renderOcrPage(int index,double scale) const {
     isolated.index_=-1; // No current page is held by this temporary document.
     return isolated.renderPage(index,scale);
 }
-int PdfDocument::characterCount() const { std::lock_guard apiGuard(pdfiumMutex); return ocrPages_.contains(index_) ? int(ocrPages_[index_].text.size()) : (text_ ? FPDFText_CountChars(text_) : 0); }
+int PdfDocument::characterCount() const { std::lock_guard apiGuard(pdfiumMutex); return ocrPages_.contains(index_) ? int(ocrPages_[index_].text.size()) : (activeText() ? FPDFText_CountChars(text_) : 0); }
 int PdfDocument::moveCommentAnnotation(int sourcePage,int index,int destinationPage,QPointF topLeft) {
     std::lock_guard apiGuard(pdfiumMutex);
     const int originalPage=index_;
@@ -346,6 +346,10 @@ void PdfDocument::closePage() { std::lock_guard apiGuard(pdfiumMutex);
     if (page_) FPDF_ClosePage(page_);
     text_ = nullptr; page_ = nullptr;
 }
+FPDF_TEXTPAGE PdfDocument::activeText() const {
+    if(!text_ && page_) text_=FPDFText_LoadPage(page_);
+    return text_;
+}
 void PdfDocument::close() { std::lock_guard apiGuard(pdfiumMutex);
     contentRevision_=++nextRevision;
     ocrPages_.clear();
@@ -371,9 +375,8 @@ bool PdfDocument::open(const QString& path, const QByteArray& password) {
     // Validate the first page before replacing the current document and its undo history.
     auto firstPage=FPDF_LoadPage(next,0);
     if(!firstPage) { FPDF_CloseDocument(next); return fail(gpdfTr("El PDF no contiene una primera página válida.")); }
-    auto firstText=FPDFText_LoadPage(firstPage);
     close(); diskDigest_=digest; bytes_=std::move(bytes); doc_=next; password_=password;
-    page_=firstPage; text_=firstText; index_=0; resetHistory(); return true;
+    page_=firstPage; index_=0; resetHistory(); return true;
 }
 bool PdfDocument::createSample(int pages,const QString& sampleText) { std::lock_guard apiGuard(pdfiumMutex);
     if(pages<1 || pages>100) return fail(gpdfTr("Cantidad de páginas de prueba inválida."));
@@ -403,8 +406,7 @@ bool PdfDocument::setPage(int index) { std::lock_guard apiGuard(pdfiumMutex);
     if(page_ && index==index_) return true;
     auto nextPage=FPDF_LoadPage(doc_,index);
     if(!nextPage) return fail(gpdfTr("No se pudo cargar la página."));
-    auto nextText=FPDFText_LoadPage(nextPage);
-    closePage(); page_=nextPage; text_=nextText; index_=index;
+    closePage(); page_=nextPage; index_=index;
     return true;
 }
 int PdfDocument::pageCount() const { std::lock_guard apiGuard(pdfiumMutex); return doc_ ? FPDF_GetPageCount(doc_) : 0; }
@@ -475,7 +477,7 @@ int PdfDocument::characterAt(QPointF p) const { std::lock_guard apiGuard(pdfiumM
         }
         return -1;
     }
-    return text_ ? FPDFText_GetCharIndexAtPos(text_, p.x(), p.y(), 12, 12) : -1; }
+    return activeText() ? FPDFText_GetCharIndexAtPos(text_, p.x(), p.y(), 12, 12) : -1; }
 QPair<int,int> PdfDocument::lineRange(int index) const {
     std::lock_guard guard(pdfiumMutex);
     const int count=characterCount();
@@ -665,7 +667,7 @@ bool PdfDocument::textAt(int index,QPointF point,double margin) const { std::loc
     if(!cachedRegions) {
     if(!interactionPage(index)) return false;
     if(index!=index_ && !hoverText_) hoverText_=FPDFText_LoadPage(hoverPage_);
-    auto text=index==index_ ? text_ : hoverText_;
+    auto text=index==index_ ? activeText() : hoverText_;
     if(!text) return false;
     auto& regions=freshRegions;
     // PDFium's text rectangles span runs, including the spaces between words.
@@ -681,6 +683,26 @@ bool PdfDocument::textAt(int index,QPointF point,double margin) const { std::loc
     for(const auto& r:cachedRegions ? *cachedRegions : freshRegions) if(r.adjusted(-margin,-margin,margin,margin).contains(point)) return true;
     return false;
 }
+static QVector<QRectF> joinTextRuns(const QVector<QRectF>& result) {
+    // PDFium can split a visual line at font runs and omit the spaces between them.
+    // Join nearby runs on the same baseline, without spanning column-sized gaps.
+    QVector<QRectF> rects;
+    for(const auto& raw:result) {
+        auto r=raw.normalized(); if(r.isEmpty()) continue;
+        bool joined=false;
+        if(!rects.isEmpty()) {
+            auto& line=rects.last();
+            double height=std::max(line.height(),r.height());
+            double overlap=std::min(line.bottom(),r.bottom())-std::max(line.top(),r.top());
+            double gap=std::max({0.0,r.left()-line.right(),line.left()-r.right()});
+            if(overlap>=0.6*std::min(line.height(),r.height()) && std::abs(line.center().y()-r.center().y())<=height*0.35 && gap<=height*0.85) {
+                line=line.united(r); joined=true;
+            }
+        }
+        if(!joined) rects.append(r);
+    }
+    return rects;
+}
 QVector<QRectF> PdfDocument::selectionRects(int first, int last) const { std::lock_guard apiGuard(pdfiumMutex);
     QVector<QRectF> result;
     if(auto it=ocrPages_.constFind(index_);it!=ocrPages_.cend()) {
@@ -689,23 +711,31 @@ QVector<QRectF> PdfDocument::selectionRects(int first, int last) const { std::lo
         for(int i=first;i<=last && i<it->boxes.size();++i) if(!it->boxes[i].isEmpty() && !result.contains(it->boxes[i])) result.append(it->boxes[i]);
         return result;
     }
-    if (!text_ || first < 0 || last < 0) return result;
+    if (first < 0 || last < 0 || !activeText()) return result;
     if (first > last) std::swap(first, last);
+    const int characters=FPDFText_CountChars(text_);
+    if(first>=characters) return result;
+    last=std::min(last,characters-1);
     int count = FPDFText_CountRects(text_, first, last - first + 1);
     for (int i = 0; i < count; ++i) {
         double left, top, right, bottom;
         if (FPDFText_GetRect(text_, i, &left, &top, &right, &bottom)) result.append(QRectF(left, bottom, right-left, top-bottom));
     }
-    return result;
+    return joinTextRuns(result);
 }
 QString PdfDocument::selectionText(int first, int last) const { std::lock_guard apiGuard(pdfiumMutex);
     if(auto it=ocrPages_.constFind(index_);it!=ocrPages_.cend()) {
         if(first<0 || last<0) return {};
         if(first>last) std::swap(first,last);
+        if(first>=it->text.size()) return {};
+        last=std::min(last,int(it->text.size())-1);
         return it->text.mid(first,last-first+1);
     }
-    if (!text_ || first < 0 || last < 0) return {};
+    if (first < 0 || last < 0 || !activeText()) return {};
     if (first > last) std::swap(first, last);
+    const int characters=FPDFText_CountChars(text_);
+    if(first>=characters) return {};
+    last=std::min(last,characters-1);
     QVector<unsigned short> buffer(last-first+2);
     int length = FPDFText_GetText(text_, first, last-first+1, buffer.data());
     return length > 0 ? QString::fromUtf16(reinterpret_cast<const char16_t*>(buffer.data()), length-1) : QString();
@@ -722,23 +752,8 @@ bool PdfDocument::textMarkup(int first, int last,const QColor& color,int type,do
 #endif
     if(!canAddAnnotations()) return fail(gpdfTr("El documento no permite agregar anotaciones."));
     if(!color.isValid() || !std::isfinite(width) || width<0.5 || width>12) return fail(gpdfTr("Color o grosor no válido."));
-    // PDFium can split a visual line at font runs and omit the spaces between them.
-    // Join nearby runs on the same baseline, without spanning column-sized gaps.
-    QVector<QRectF> rects;
-    for(const auto& raw:selectionRects(first,last)) {
-        auto r=raw.normalized(); if(r.isEmpty()) continue;
-        bool joined=false;
-        if(!rects.isEmpty()) {
-            auto& line=rects.last();
-            double height=std::max(line.height(),r.height());
-            double overlap=std::min(line.bottom(),r.bottom())-std::max(line.top(),r.top());
-            double gap=std::max({0.0,r.left()-line.right(),line.left()-r.right()});
-            if(overlap>=0.6*std::min(line.height(),r.height()) && std::abs(line.center().y()-r.center().y())<=height*0.35 && gap<=height*0.85) {
-                line=line.united(r); joined=true;
-            }
-        }
-        if(!joined) rects.append(r);
-    }
+    auto rects=selectionRects(first,last);
+    if(ocrPages_.contains(index_)) rects=joinTextRuns(rects);
     if (rects.isEmpty()) return fail(gpdfTr("Seleccionar texto antes de resaltar o subrayar."));
     auto annot = FPDFPage_CreateAnnot(page_, FPDF_ANNOTATION_SUBTYPE(type));
     if (!annot) return fail(gpdfTr("No se pudo crear la marca de texto."));

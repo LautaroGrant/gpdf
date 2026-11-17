@@ -28,4 +28,5 @@ Link of releases: https://github.com/LautaroGrant/gpdf/releases
 - Annotation export to Markdown, text or HTML.
 - Supports printing and print preview.
 - Automatic OCR for undigitalized documents.
+- Workbench: merge, split, remove, extract and organize pages, and save a PDF with searchable OCR text.
 - Spanish and English supported.

@@ -3,6 +3,10 @@
   <context>
     <name>GPDF</name>
     <message>
+      <source>Modo profesional</source>
+      <translation>Professional mode</translation>
+    </message>
+    <message>
       <source>Comentario</source>
       <translation>Comment</translation>
     </message>
@@ -883,10 +887,6 @@ Created by Lautaro Grant</translation>
     <message>
       <source>Atajos de teclado</source>
       <translation>Keyboard shortcuts</translation>
-    </message>
-    <message>
-      <source>Elegir una función y presionar su nueva combinación. Un campo vacío elimina el atajo.</source>
-      <translation>Choose an action and press its new key combination. An empty field removes the shortcut.</translation>
     </message>
     <message>
       <source>Función</source>

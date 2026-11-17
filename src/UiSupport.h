@@ -84,6 +84,7 @@
 #include <QScrollBar>
 #include <QCache>
 #include <QTabBar>
+#include <QProcess>
 #include <QStyledItemDelegate>
 #include <QTextDocument>
 #include <QAbstractTextDocumentLayout>
@@ -99,15 +100,28 @@
 #ifdef Q_OS_WIN
 // Disable only this window's transition animation while Qt restores its native frame.
 class DocumentTabBar : public QTabBar {
+public:
+    std::function<void(int,QPoint)> detachRequested;
+    std::function<void(int,QPoint,bool)> dragMoved;
+    std::function<void()> dragFinished;
+    void cancelDocumentDrag() { draggingTab=false; if(dragFinished) dragFinished(); }
 protected:
     QSize tabSizeHint(int index) const override {
         auto size=QTabBar::tabSizeHint(index);
         size.setWidth(qMin(size.width(),240));
+        size.setHeight(qMax(fontMetrics().height()+8,size.height()-8));
         return size;
     }
     void mousePressEvent(QMouseEvent* event) override {
         if(event->button()==Qt::MiddleButton) { middleTab=tabAt(event->position().toPoint()); event->accept(); return; }
+        if(event->button()==Qt::LeftButton) { dragStart=event->position().toPoint(); draggingTab=tabAt(dragStart)>=0; }
         QTabBar::mousePressEvent(event);
+    }
+    void mouseMoveEvent(QMouseEvent* event) override {
+        QTabBar::mouseMoveEvent(event);
+        if(draggingTab && event->buttons().testFlag(Qt::LeftButton)
+           && (event->position().toPoint()-dragStart).manhattanLength()>=QApplication::startDragDistance() && dragMoved)
+            dragMoved(currentIndex(),event->globalPosition().toPoint(),!rect().adjusted(-12,-12,12,12).contains(event->position().toPoint()));
     }
     void mouseReleaseEvent(QMouseEvent* event) override {
         if(event->button()==Qt::MiddleButton) {
@@ -115,9 +129,18 @@ protected:
             if(index>=0 && index==middleTab) emit tabCloseRequested(index);
             middleTab=-1; event->accept(); return;
         }
+        const bool detach=event->button()==Qt::LeftButton && draggingTab
+            && (event->position().toPoint()-dragStart).manhattanLength()>=QApplication::startDragDistance()
+            && !rect().adjusted(-12,-12,12,12).contains(event->position().toPoint());
+        const int index=currentIndex(); const QPoint position=event->globalPosition().toPoint();
+        draggingTab=false;
+        if(dragFinished) dragFinished();
         QTabBar::mouseReleaseEvent(event);
+        if(detach && detachRequested) detachRequested(index,position);
     }
 private:
+    QPoint dragStart;
+    bool draggingTab=false;
     int middleTab=-1;
 };
 class WindowTransitionsGuard {

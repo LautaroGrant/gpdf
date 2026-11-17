@@ -13,7 +13,7 @@ public:
     int rotation=0;
     PdfDocument& pdf;
     Tool tool=Select;
-    QColor penColor=QColor(40,85,180),highlightColor=QColor(255,210,50,153),secondaryHighlightColor=QColor(232,136,16,153);
+    QColor penColor=QColor(40,85,180),highlightColor=QColor(255,210,50,204),secondaryHighlightColor=QColor(232,136,16,204);
     double penWidth=2;
     QColor underlineColor=QColor(40,85,180);
     double underlineWidth=1.5;
@@ -49,6 +49,8 @@ public:
     std::function<void(int)> annotationMoved;
     explicit PageView(PdfDocument& document) : pdf(document),cache(64*1024),previewCache(8*1024) {
         setMouseTracking(true); setFocusPolicy(Qt::StrongFocus); workers.setMaxThreadCount(2);
+        neighborTimer.setSingleShot(true); neighborTimer.setInterval(80);
+        connect(&neighborTimer,&QTimer::timeout,this,[this]{ prefetchNeighbor(); });
         dragScroll=new QTimer(this); dragScroll->setInterval(40);
         connect(dragScroll,&QTimer::timeout,this,[this]{
             if(!draggingText || !dragIsComment) { dragScroll->stop(); return; }
@@ -63,7 +65,7 @@ public:
         });
     }
     QThreadPool workers;
-    void shutdownWorkers() { workers.clear(); workers.waitForDone(); }
+    void shutdownWorkers() { neighborTimer.stop(); workers.clear(); workers.waitForDone(); }
     ~PageView() override { shutdownWorkers(); qApp->removeEventFilter(this); }
     bool finishText() {
         if(!textEditor) return true;
@@ -376,10 +378,11 @@ protected:
             if(!image) image=previewCache.object(i);
             if(image) painter.drawImage(r,*image);
         }
+        if(!neighborTimer.isActive() && !neighborPending) neighborTimer.start();
         if(!apiLock.owns_lock()) return;
-        painter.setPen(Qt::NoPen); painter.setBrush(QColor(65,125,220,65));
+        painter.setPen(Qt::NoPen); painter.setBrush(QColor(65,125,220,75));
         if(allTextSelected) for(int i=paintRange.first;i<paintRange.second;++i) if(!pageRects[i].isEmpty()) painter.drawRect(pageRects[i]);
-        painter.setBrush(QColor(65,125,220,65));
+        painter.setBrush(QColor(65,125,220,75));
         if(first>=0 && last>=0) for(auto r:pdf.selectionRects(first,last)) painter.drawRect(deviceRect(r));
         if(searchPage==pdf.pageIndex() && !allTextSelected && !(first>=0 && last>=0)) {
             painter.setBrush(QColor(255,180,30,110)); painter.setPen(QPen(QColor("#d97706"),1));
@@ -560,8 +563,50 @@ private:
     QSet<int> pendingRenders;
     QSet<int> stalePages;
     bool renderRetryScheduled=false;
+    QTimer neighborTimer;
+    bool neighborPending=false;
+    QSet<int> failedNeighbors;
+    void prefetchNeighbor() {
+        if(neighborPending || !pendingRenders.isEmpty() || visibleFirst<0 || !pdf.loaded()) return;
+        // Only one small speculative raster at a time. Never queue behind PDFium
+        // work: the visible-page renderer must get the next available slot.
+        std::unique_lock guard(PdfDocument::apiMutex(),std::try_to_lock);
+        if(!guard.owns_lock()) { neighborTimer.start(); return; }
+        int page=-1;
+        for(int candidate:{visibleLast.load()+1,visibleFirst.load()-1})
+            if(candidate>=0 && candidate<sizes.size() && !failedNeighbors.contains(candidate) && !cache.contains(candidate) && !previewCache.contains(candidate)) { page=candidate; break; }
+        if(page<0) return;
+        const int generation=cacheGeneration,turn=rotation;
+        const quint64 revision=pdf.revision();
+        const QSize raster=sizes[page].scaled(QSizeF(512,512),Qt::KeepAspectRatio).toSize();
+        QPointer<PageView> target(this); neighborPending=true;
+        workers.start([target,page,generation,turn,revision,raster]{
+            QImage preview;
+            bool attempted=false;
+            {
+                std::unique_lock lock(PdfDocument::apiMutex(),std::try_to_lock);
+                if(lock.owns_lock() && target && target->cacheGeneration==generation &&
+                   (page==target->visibleLast+1 || page==target->visibleFirst-1) && target->pdf.revision()==revision) {
+                    attempted=true; preview=target->pdf.renderPage(page,1.0,raster);
+                }
+            }
+            if(turn && !preview.isNull()) preview=preview.transformed(QTransform().rotate(turn*90));
+            if(target) QMetaObject::invokeMethod(target.data(),[target,page,generation,preview,attempted]{
+                if(!target) return;
+                target->neighborPending=false;
+                if(target->cacheGeneration!=generation) return;
+                if(attempted && preview.isNull()) target->failedNeighbors.insert(page);
+                if(!preview.isNull() && !target->previewCache.contains(page))
+                    target->previewCache.insert(page,new QImage(preview),std::max(1,int(preview.sizeInBytes()/1024)));
+                target->neighborTimer.start();
+                if(page>=target->visibleFirst && page<=target->visibleLast) target->update();
+            },Qt::QueuedConnection);
+        },-1);
+    }
     double renderDevicePixelRatio=0;
     void invalidateCache(int page=-1,bool preservePreview=false) {
+        neighborTimer.stop();
+        failedNeighbors.clear();
         ++cacheGeneration; pendingRenders.clear();
         if(preservePreview) { if(page>=0) { if(cache.object(page) || previewCache.object(page)) stalePages.insert(page); } else { for(int key:cache.keys()) stalePages.insert(key); for(int key:previewCache.keys()) stalePages.insert(key); } }
         else if(page<0) { cache.clear(); previewCache.clear(); stalePages.clear(); }

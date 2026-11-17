@@ -17,6 +17,8 @@
 
 // PDFium calls are serialized with apiMutex(); background reads validate revision().
 class PdfDocument {
+    friend class WorkbenchPdf;
+    friend class DocumentTransfer;
 public:
     struct AnnotationEntry { int page; int index; int type; QString text; bool operator==(const AnnotationEntry&) const = default; };
     QVector<AnnotationEntry> documentAnnotations() const;
@@ -98,7 +100,7 @@ public:
     QVector<SearchMatch> searchPage(int index, const QString& query) const;
     QVector<QRectF> selectionRects(int first, int last) const;
     QString selectionText(int first, int last) const;
-    bool highlight(int first, int last, const QColor& color=QColor(255,210,50,153));
+    bool highlight(int first, int last, const QColor& color=QColor(255,210,50,204));
     bool underline(int first,int last,const QColor& color=QColor(40,85,180),double width=1.5);
     bool note(QPointF point, const QString& text);
     bool freeText(QPointF point, const QString& text);
@@ -151,6 +153,8 @@ private:
     // Caller holds apiMutex(); returned page is owned by this document.
     FPDF_PAGE interactionPage(int index) const;
     void closePage();
+    // Caller holds apiMutex(); extraction is deferred until a text operation.
+    FPDF_TEXTPAGE activeText() const;
     void close();
     bool fail(const QString& message);
     bool canAddAnnotations() const;
@@ -158,7 +162,7 @@ private:
     bool writeFreeText(FPDF_ANNOTATION annot, QPointF point, const QString& value, const TextStyle& style, bool* mutated=nullptr);
     FPDF_DOCUMENT doc_ = nullptr;
     FPDF_PAGE page_ = nullptr;
-    FPDF_TEXTPAGE text_ = nullptr;
+    mutable FPDF_TEXTPAGE text_ = nullptr;
     mutable FPDF_PAGE hoverPage_ = nullptr;
     mutable FPDF_TEXTPAGE hoverText_ = nullptr;
     mutable int hoverIndex_ = -1;

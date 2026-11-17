@@ -26,5 +26,6 @@ Enlace a las versiones publicadas: https://github.com/LautaroGrant/gpdf/releases
 - Pestañas, miniaturas, índices del PDF, marcadores personales y progreso de lectura.
 - Copias de recuperación y restauración de sesiones.
 - Exportación de anotaciones a Markdown, texto o HTML; impresión y vista previa de impresión.
-- Disponible en español e inglés.
 - Complemento de OCR para documentos no digitalizados.
+- Workbench: unir, separar, remover, extraer y organizar páginas, y guardar un PDF con texto OCR buscable.
+- Disponible en español e inglés.
