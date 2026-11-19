@@ -35,22 +35,23 @@ protected:
     void reject() override;
     void closeEvent(QCloseEvent* event) override;
 private:
-    struct Input { std::shared_ptr<PdfDocument> pdf; QString path,label,original; bool modifyPermitted=true; };
-    QVector<Input> inputs;
+    struct Input { std::shared_ptr<PdfDocument> pdf; QString path,label,original; };
     QTemporaryDir snapshots;
+    QVector<Input> inputs;
     QListWidget *tools,*files,*pages;
     QLabel *title,*description,*pageSummary,*status;
     QLineEdit *range,*groups,*destination;
     QComboBox* splitMode;
     QSpinBox* chunk;
+    QSize thumbnailItemSize;
     QPushButton *add,*current,*removeFile,*fileUp,*fileDown,*rotate,*removePage,*reset,*selectAll,*save,*cancel,*browse,*reveal;
     QString lastSavedFile;
+    QString rangeError;
     QWidget *fileControls,*rangeControls,*splitControls,*pageControls;
     QProgressBar* progress;
     QTimer thumbnailTimer;
     QThreadPool workers;
     bool busy=false,thumbnailPending=false,syncSelection=false;
-    bool needsPassword=false;
     int previewGeneration=0;
     QList<QPair<int,int>> thumbnailOrder;
     QSet<int> failedThumbnails;
@@ -59,9 +60,11 @@ private:
     Tool tool() const { return Tool(tools->currentRow()); }
     int inputIndex() const;
     void chooseFiles();
+    void importFiles(const QStringList& paths,const QHash<QString,QString>& labels);
     void changeTool();
     void loadPages();
     void refreshSelection();
+    void updatePagePreview();
     void selectRange();
     void thumbnail();
     void chooseDestination();
@@ -69,4 +72,5 @@ private:
     void setBusy(bool value);
     void showError(const QString& error);
     void moveFile(int direction);
+    void removeInputs(const QSet<int>& indexes);
 };

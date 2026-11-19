@@ -96,6 +96,7 @@ void PdfDocument::swap(PdfDocument& other) { std::lock_guard apiGuard(pdfiumMute
     std::swap(hoverRegions_,other.hoverRegions_);
     std::swap(bytes_,other.bytes_);
     std::swap(diskDigest_,other.diskDigest_);
+    originalBytesForDigest_.swap(other.originalBytesForDigest_);
     std::swap(password_,other.password_);
     std::swap(index_,other.index_);
     std::swap(dirty_,other.dirty_);
@@ -104,7 +105,7 @@ void PdfDocument::swap(PdfDocument& other) { std::lock_guard apiGuard(pdfiumMute
 }
 std::recursive_mutex& PdfDocument::apiMutex() { return pdfiumMutex; }
 quint64 PdfDocument::revision() const { std::lock_guard apiGuard(pdfiumMutex); return revision_; }
-void PdfDocument::closeDocument() { std::lock_guard apiGuard(pdfiumMutex); revision_=++nextRevision; close(); history_.clear(); historyPosition_=-1; savedHistoryId_=0; password_.clear(); index_=0; hiddenTextPreview=-1; }
+void PdfDocument::closeDocument() { std::lock_guard apiGuard(pdfiumMutex); revision_=++nextRevision; close(); originalBytesForDigest_.clear(); diskDigest_.clear(); history_.clear(); historyPosition_=-1; savedHistoryId_=0; password_.clear(); index_=0; hiddenTextPreview=-1; }
 QByteArray PdfDocument::snapshot() const { std::lock_guard apiGuard(pdfiumMutex);
     struct MemoryWriter : FPDF_FILEWRITE {
         QByteArray bytes;
@@ -367,7 +368,6 @@ bool PdfDocument::open(const QString& path, const QByteArray& password) {
     if (!file.open(QIODevice::ReadOnly)) { std::lock_guard apiGuard(pdfiumMutex); return fail(file.errorString()); }
     QByteArray bytes = file.readAll();
     const auto readError=file.error(); const auto readMessage=file.errorString(); file.close();
-    const auto digest=readError==QFileDevice::NoError ? QCryptographicHash::hash(bytes,QCryptographicHash::Sha256) : QByteArray();
     std::lock_guard apiGuard(pdfiumMutex);
     if(readError!=QFileDevice::NoError) return fail(readMessage);
     auto next = FPDF_LoadMemDocument64(bytes.constData(), size_t(bytes.size()), password.constData());
@@ -375,12 +375,13 @@ bool PdfDocument::open(const QString& path, const QByteArray& password) {
     // Validate the first page before replacing the current document and its undo history.
     auto firstPage=FPDF_LoadPage(next,0);
     if(!firstPage) { FPDF_CloseDocument(next); return fail(gpdfTr("El PDF no contiene una primera página válida.")); }
-    close(); diskDigest_=digest; bytes_=std::move(bytes); doc_=next; password_=password;
+    close(); diskDigest_.clear(); bytes_=std::move(bytes); doc_=next; password_=password;
+    originalBytesForDigest_=bytes_; // Implicitly shared until a disk comparison or transfer needs the hash.
     page_=firstPage; index_=0; resetHistory(); return true;
 }
 bool PdfDocument::createSample(int pages,const QString& sampleText) { std::lock_guard apiGuard(pdfiumMutex);
     if(pages<1 || pages>100) return fail(gpdfTr("Cantidad de páginas de prueba inválida."));
-    close(); password_.clear(); doc_ = FPDF_CreateNewDocument();
+    close(); originalBytesForDigest_.clear(); diskDigest_.clear(); password_.clear(); doc_ = FPDF_CreateNewDocument();
     if (!doc_) return fail(gpdfTr("No se pudo crear el documento de prueba."));
     for(int i=0;i<pages;++i) {
     auto page = FPDFPage_New(doc_, i, 595, 842);
@@ -869,9 +870,16 @@ bool PdfDocument::ink(const QVector<QPointF>& points,const QColor& color,double 
     if (!ok) { FPDFPage_RemoveAnnot(page_, annotationCount()-1); return fail(gpdfTr("Falló la creación del trazo.")); }
     dirty_ = true; recordHistory(); return true;
 }
+QByteArray PdfDocument::diskDigest() const {
+    std::lock_guard guard(pdfiumMutex);
+    if(!originalBytesForDigest_.isEmpty()) {
+        diskDigest_=QCryptographicHash::hash(originalBytesForDigest_,QCryptographicHash::Sha256);
+        originalBytesForDigest_.clear();
+    }
+    return diskDigest_;
+}
 bool PdfDocument::diskChanged(const QString& path) const {
-    QByteArray expected;
-    { std::lock_guard guard(pdfiumMutex); expected=diskDigest_; }
+    const QByteArray expected=diskDigest();
     QFile file(path);
     if(!file.open(QIODevice::ReadOnly)) return false;
     QCryptographicHash hash(QCryptographicHash::Sha256);
@@ -894,6 +902,7 @@ bool PdfDocument::saveCopy(const QString& path) { std::unique_lock apiGuard(pdfi
     if(revision_==savedRevision) {
         dirty_=false; savedHistoryId_=savedId;
         diskDigest_=writer.hash.result();
+        originalBytesForDigest_.clear();
     }
     return true;
 }

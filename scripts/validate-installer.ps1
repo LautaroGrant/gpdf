@@ -24,6 +24,11 @@ for($pass=1;$pass -le 2;$pass++) {
     $languageArguments=if($InstallerLanguage -eq 'spanish') { @('/LANG=spanish') } else { @() }
     $process=Start-Process -FilePath $setup -ArgumentList (@('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS','/TASKS=""',('/DIR="'+$installPath+'"'),('/LOG="'+(Join-Path $testRoot "install-$pass.log")+'"')) + $languageArguments) -WindowStyle Hidden -PassThru -Wait
     if($process.ExitCode -ne 0) { throw "Falló la instalación/actualización de prueba: $($process.ExitCode)" }
+    foreach($name in @('README.md','README.es.md','CHANGELOG.md')) {
+        $legacyFile=Join-Path $installPath $name
+        if(Test-Path -LiteralPath $legacyFile) { throw "Documentación del repositorio en la instalación: $name" }
+        if($pass -eq 1) { Set-Content -LiteralPath $legacyFile -Value 'Legacy distribution file' }
+    }
 }
 $package=Join-Path $root "dist/GPDF-$version"
 if($TestSigningCertificate) { $package=Join-Path $root "dist/GPDF-$version-TestSigned" }

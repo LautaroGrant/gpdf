@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 — November 18, 2026
+
+- Workbench improvements on UI and bug fixes. Detection of virtual paths of pdfs so they can be drag and dropped from different applications outside file explorer/desktop.
+- Slight performance improvement in program startup.
+
 ## 0.4.0 — November 17, 2026
 
 - Added Workbench. A set of tools to merge, split, remove, extract, and organize PDF pages, and export searchable PDFs with OCR.

@@ -16,14 +16,6 @@ WorkbenchPdf::~WorkbenchPdf() {
     std::lock_guard lock(PdfDocument::apiMutex());
     if(font_) FPDFFont_Close(font_);
 }
-bool WorkbenchPdf::canAssemble(const PdfDocument& source) {
-    std::lock_guard lock(PdfDocument::apiMutex());
-    return source.doc_ && (FPDF_GetSecurityHandlerRevision(source.doc_)<0 || (FPDF_GetDocPermissions(source.doc_)&((1u<<10)|(1u<<3))));
-}
-bool WorkbenchPdf::canModify(const PdfDocument& source) {
-    std::lock_guard lock(PdfDocument::apiMutex());
-    return source.doc_ && (FPDF_GetSecurityHandlerRevision(source.doc_)<0 || (FPDF_GetDocPermissions(source.doc_)&(1u<<3)));
-}
 bool WorkbenchPdf::parsePages(const QString& text,int count,QVector<int>& pages,QString& error) {
     pages.clear(); error.clear();
     const QRegularExpression range("^\\s*(\\d+)\\s*(?:-\\s*(\\d+)\\s*)?$");
@@ -46,8 +38,9 @@ bool WorkbenchPdf::parsePages(const QString& text,int count,QVector<int>& pages,
 }
 bool WorkbenchPdf::appendPage(const PdfDocument& source,int page,int turns) {
     std::lock_guard lock(PdfDocument::apiMutex());
-    if(!canAssemble(source)) return fail(workbenchTr("El PDF no permite reorganizar sus páginas.","The PDF does not allow page assembly."));
+    if(!source.doc_) return fail(workbenchTr("Falta un documento de origen.","A source document is missing."));
     if(page<0 || page>=source.pageCount()) return fail(workbenchTr("Página fuera de rango.","Page out of range."));
+    // Import readable pages into a new PDF without carrying over source security.
     if(!output_.doc_) {output_.doc_=FPDF_CreateNewDocument();output_.index_=-1;}
     const int index=output_.pageCount();
     if(!output_.doc_ || !FPDF_ImportPagesByIndex(output_.doc_,source.doc_,&page,1,index))
@@ -149,7 +142,6 @@ QString WorkbenchExport::run(const QVector<WorkbenchOutput>& outputs,const std::
             if(!ref.document) return workbenchTr("Falta un documento de origen.","A source document is missing.");
             if(!result.appendPage(*ref.document,ref.page,ref.quarterTurns)) return result.error();
             if(output.ocr) {
-                if(!WorkbenchPdf::canModify(*ref.document)) return workbenchTr("El PDF no permite incorporar texto OCR.","The PDF does not allow adding OCR text.");
                 if(ref.document->pageText(ref.page).trimmed().isEmpty() || ref.document->pageNeedsOcr(ref.page)) {
                     const int outputPage=result.document().pageCount()-1;
                     const auto size=result.document().pageSize(outputPage);

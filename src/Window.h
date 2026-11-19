@@ -1550,7 +1550,7 @@ private:
         for(int i=0;i<goActions.size();++i) {
             auto action=goActions[i]; bool enabled=pdf.loaded();
             const auto name=action->objectName();
-            if(name=="goPrevious" || name=="goFirst") enabled=enabled && pdf.pageIndex()>0;
+            if(name=="goFirst") enabled=enabled && pdf.pageIndex()>0;
             if(name=="goNext" || name=="goLast") enabled=enabled && (name=="goNext" && view->mode==PageView::Double ? (pdf.pageIndex()/2+1)*2<pdf.pageCount() : pdf.pageIndex()+1<pdf.pageCount());
             if(name=="goBack" || name=="goForward") {
                 enabled=enabled && activeDocument>=0;
@@ -1580,7 +1580,7 @@ private:
         extra(gpdfTr("Documento siguiente"),"nextDocumentAction","Ctrl+Tab",[this]{ if(documents.size()>1) switchDocument((activeDocument+1)%int(documents.size())); });
         extra(gpdfTr("Documento anterior"),"previousDocumentAction","Ctrl+Shift+Tab",[this]{ if(documents.size()>1) switchDocument((activeDocument+int(documents.size())-1)%int(documents.size())); });
         auto confirm=extra(gpdfTr("Confirmar texto (durante edición)"),"confirmTextAction","Return",[this]{ view->finishText(); }); removeAction(confirm);
-        auto cancel=extra(gpdfTr("Cancelar / detener / salir de pantalla completa"),"cancelContextAction","Esc",[this]{ if(view->annotationDragging()) view->cancelAnnotationDrag(); else if(autoScrollTimer->isActive()) stopAutoScroll(); else if(view->commentVisible()) view->hideComment(); else if(view->findChild<QWidget*>("inlineTextEditor")) view->cancelText(); else if(isFullScreen()) { setFullscreen(false); } else if(professionalMode) setProfessionalMode(false); }); removeAction(cancel);
+        auto cancel=extra(gpdfTr("Cancelar / detener / salir de pantalla completa"),"cancelContextAction","Esc",[this]{ if(view->annotationDragging()) view->cancelAnnotationDrag(); else if(autoScrollTimer->isActive()) stopAutoScroll(); else if(view->commentVisible()) view->hideComment(); else if(view->findChild<QWidget*>("inlineTextEditor")) view->cancelText(); else if(isFullScreen()) { setFullscreen(false); }  }); removeAction(cancel);
         auto enter=extra(gpdfTr("Buscar / resultado siguiente (en Búsqueda)"),"searchEnterAction","Return",[this]{ searchEnter(); }); removeAction(enter);
         auto configure=extra(gpdfTr("&Atajos"),"configureShortcutsAction",{},[this]{ configureShortcuts(); }); shortcutMenuActions.append(configure);
         QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.beginGroup("shortcuts");
@@ -2335,6 +2335,7 @@ private:
     void page(int delta) {
         if(!view->finishText()) return;
         int next=view->mode==PageView::Double ? (pdf.pageIndex()/2+delta)*2 : pdf.pageIndex()+delta;
+        if(delta<0 && pdf.pageIndex()==0) next=0;
         if(next<0 || next>=pdf.pageCount()) return;
         updatingView=true;
         if(pdf.setPage(next)) {

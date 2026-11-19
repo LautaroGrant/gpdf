@@ -18,8 +18,6 @@ public:
     bool save(const QString& path);
     const PdfDocument& document() const { return output_; }
     QString error() const { return error_; }
-    static bool canAssemble(const PdfDocument& source);
-    static bool canModify(const PdfDocument& source);
     static bool parsePages(const QString& text,int count,QVector<int>& pages,QString& error);
 private:
     bool fail(const QString& error) { error_=error; return false; }

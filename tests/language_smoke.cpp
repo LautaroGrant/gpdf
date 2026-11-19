@@ -98,7 +98,9 @@ int main(int argc,char** argv) {
         require(window.menuBar()->isHidden(),"theme change cannot reveal professional menu");
         dark->trigger();
         QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier); QApplication::sendEvent(&window,&escape);
-        require(!professional->isChecked() && !tools->isHidden(),"Escape restores tools");
+        require(professional->isChecked() && tools->isHidden(),"Escape preserves professional mode");
+        professional->trigger();
+        require(!professional->isChecked() && !tools->isHidden(),"professional toggle restores tools");
         auto toolbarToggle=window.findChild<QAction*>("toggleToolbarAction");
         toolbarToggle->trigger(); professional->trigger(); professional->trigger();
         require(tools->isHidden(),"professional mode preserves manually hidden toolbar");

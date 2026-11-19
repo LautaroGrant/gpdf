@@ -4,7 +4,7 @@
 QJsonObject DocumentTransfer::access(const PdfDocument& document) {
     std::lock_guard guard(PdfDocument::apiMutex());
     return {{"password",QString::fromLatin1(document.password_.toBase64())},
-            {"digest",QString::fromLatin1(document.diskDigest_.toBase64())}};
+            {"digest",QString::fromLatin1(document.diskDigest().toBase64())}};
 }
 
 bool DocumentTransfer::open(PdfDocument& document,const QString& snapshot,const QJsonObject& access,bool dirty) {
@@ -12,6 +12,7 @@ bool DocumentTransfer::open(PdfDocument& document,const QString& snapshot,const 
     std::lock_guard guard(PdfDocument::apiMutex());
     // The snapshot may differ from the original file, even for a clean document.
     document.diskDigest_=QByteArray::fromBase64(access["digest"].toString().toLatin1());
+    document.originalBytesForDigest_.clear();
     if(dirty) document.markRecovered();
     return true;
 }

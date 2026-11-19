@@ -6,6 +6,9 @@
 #include <QTemporaryDir>
 #include <iostream>
 #include <stdexcept>
+#ifdef Q_OS_WIN
+#include <shlobj.h>
+#endif
 
 static void require(bool ok,const char* message) { if(!ok)throw std::runtime_error(message); }
 static QByteArray digest(const QString& path) {QFile file(path);require(file.open(QIODevice::ReadOnly),"read hash input");return QCryptographicHash::hash(file.readAll(),QCryptographicHash::Sha256);}
@@ -35,8 +38,19 @@ int main(int argc,char** argv) {
   WorkbenchOutput part=job;part.path=temp.filePath("part-one.pdf");invalid.path=temp.filePath("part-two.pdf");invalid.pages.last().page=999;
   require(!WorkbenchExport::run({part,invalid},cancelled).isEmpty() && !QFileInfo::exists(part.path) && !QFileInfo::exists(invalid.path),"failed split publishes no partial output");
   require(!WorkbenchExport::run({part},cancelled,[&](int,int){cancelled=true;}).isEmpty() && !QFileInfo::exists(part.path),"cancelled export creates no file");cancelled=false;
-  auto restricted=std::make_shared<PdfDocument>();require(restricted->open(QString(GPDF_SOURCE_DIR)+"/tests/data/annotations-restricted.pdf","read-only"),"restricted input");
-  WorkbenchPdf denied;require(!denied.appendPage(*restricted,0),"respect assembly permissions");
+  const auto restrictedPath=QString(GPDF_SOURCE_DIR)+"/tests/data/workbench-restricted.pdf";
+  const auto restrictedHash=digest(restrictedPath);
+  auto restricted=std::make_shared<PdfDocument>();
+  require(restricted->open(restrictedPath) &&
+          restricted->properties().contains({gpdfTr("Modificación permitida"),gpdfTr("No")}),"restricted PDF opens without a password");
+  WorkbenchOutput restrictedOcr;
+  restrictedOcr.path=temp.filePath("restricted-ocr.pdf");
+  restrictedOcr.ocr=true;
+  restrictedOcr.pages.append({restricted,0,0,restrictedPath});
+  error=WorkbenchExport::run({restrictedOcr},cancelled,{},[](const QImage&,QSizeF,auto&,QString&){return true;});
+  require(error.isEmpty(),qPrintable(error));
+  require(reopened.open(restrictedOcr.path) &&
+          reopened.properties().contains({gpdfTr("Seguridad"),gpdfTr("Sin cifrado")}),"OCR export removes source permissions");
   {
    QImage image(1200,500,QImage::Format_RGB32);image.fill(Qt::white);QPainter p(&image);p.setFont(QFont("Arial",48));p.drawText(50,150,"GPDF OCR test 123");p.end();
    QPdfWriter writer(scan);writer.setResolution(72);writer.setPageSize(QPageSize(QSizeF(600,250),QPageSize::Point));writer.setPageMargins(QMarginsF(),QPageLayout::Point);QPainter painter(&writer);painter.drawImage(QRectF(0,0,600,250),image);
@@ -99,6 +113,32 @@ int main(int argc,char** argv) {
   }
   if(app.arguments().contains("--dark")){window.findChild<QAction*>("darkModeAction")->trigger();require(window.menuBar()->actions().at(5)==action && !action->menu(),"direct Workbench action in dark menu bar");}
   Workbench workbench(&window);workbench.show();
+  require(window.screen()->availableGeometry().size().expandedTo(workbench.frameGeometry().size())==window.screen()->availableGeometry().size(),"Workbench fits available screen");
+#ifdef Q_OS_WIN
+  {
+   Workbench attachments(&window);attachments.show();
+   auto list=attachments.findChild<QListWidget*>("workbenchFiles");
+   const struct { UINT count; FILEDESCRIPTORW files[3]; } group{3,{
+    {.cFileName=L"not-a-pdf.txt"}, {.cFileName=L"Informe \u00f1.PDF"}, {.cFileName=L"Informe \u00f1.PDF"}
+   }};
+   QMimeData mime;
+   mime.setData("application/x-qt-windows-mime;value=\"FileGroupDescriptorW\"",
+                QByteArray(reinterpret_cast<const char*>(&group),sizeof(group)));
+   QFile firstPdf(first),secondPdf(second);
+   require(firstPdf.open(QIODevice::ReadOnly) && secondPdf.open(QIODevice::ReadOnly),"read attachment fixtures");
+   mime.setData("application/x-qt-windows-mime;value=\"FileContents\";index=1",firstPdf.readAll());
+   mime.setData("application/x-qt-windows-mime;value=\"FileContents\";index=2",secondPdf.readAll());
+   QDragEnterEvent enter({5,5},Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);
+   QApplication::sendEvent(list->viewport(),&enter);
+   QDropEvent drop({5,5},Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);
+   QApplication::sendEvent(list->viewport(),&drop);
+   app.processEvents();
+   require(enter.isAccepted() && drop.isAccepted() && list->count()==2,"import both virtual PDFs and skip non-PDF");
+   require(list->item(0)->text().startsWith(QString::fromWCharArray(group.files[1].cFileName)) &&
+           list->item(0)->text().endsWith(english ? "5 pages" : "5 páginas") &&
+           list->item(1)->text().endsWith(english ? "2 pages" : "2 páginas"),"keep filename and attachment indexes");
+  }
+#endif
   auto viewport=workbench.findChild<QListWidget*>("workbenchFiles")->viewport();
   QMimeData urls;
   urls.setUrls({QUrl::fromLocalFile(first), QUrl::fromLocalFile(second), QUrl::fromLocalFile(temp.path())});
@@ -110,6 +150,31 @@ int main(int argc,char** argv) {
   app.processEvents();
   require(drop.isAccepted() && workbench.findChild<QListWidget*>("workbenchFiles")->count()==2,"drop imports both PDFs and skips directory");
   auto tools=workbench.findChild<QListWidget*>("workbenchTools");auto files=workbench.findChild<QListWidget*>("workbenchFiles");auto pages=workbench.findChild<QListWidget*>("workbenchPages");
+  require(workbench.findChild<QComboBox*>("workbenchSplitMode")->currentIndex()==1,"split defaults to page groups");
+  pages->setCurrentRow(1);
+  require(files->currentRow()==1,"merge thumbnail selects matching file");
+  files->setCurrentRow(0);
+  require(pages->currentRow()==0,"merge file selects matching thumbnail");
+  pages->clearSelection();
+  files->setCurrentRow(0);
+  workbench.findChild<QPushButton*>("workbenchFileDown")->click();
+  require(files->item(0)->data(Qt::UserRole)==pages->item(0)->data(Qt::UserRole) &&
+          pages->item(0)->text()==QFileInfo(second).fileName() && pages->currentRow()==1,
+          "move down updates thumbnail order and preserves moved selection");
+  workbench.findChild<QPushButton*>("workbenchFileUp")->click();
+  require(pages->item(0)->text()==QFileInfo(first).fileName() &&
+          files->item(0)->data(Qt::UserRole)==pages->item(0)->data(Qt::UserRole) &&
+          pages->currentRow()==0,"move up updates thumbnails");
+  const auto movedDocument=files->currentItem()->data(Qt::UserRole);
+  require(files->model()->moveRows({},0,1,{},2),"move file row through drag model");
+  require(files->currentItem()->data(Qt::UserRole)==movedDocument &&
+          pages->currentItem()->data(Qt::UserRole)==movedDocument &&
+          pages->currentRow()==files->currentRow() &&
+          pages->item(0)->data(Qt::UserRole)==files->item(0)->data(Qt::UserRole),
+          "file drag synchronizes thumbnail order and selected document");
+  require(files->model()->moveRows({},1,1,{},0),"restore file order through drag model");
+  pages->clearSelection();
+  require(pages->toolTip().isEmpty() && pages->item(0)->toolTip().isEmpty() && files->item(0)->toolTip().isEmpty(),"Workbench list tooltips removed");
   require(tools->count()==6 && tools->item(0)->text()==(english ? "Merge PDFs" : "Unir PDFs"),"six translated tools");
   auto dest=workbench.findChild<QLineEdit*>("workbenchDestination");auto range=workbench.findChild<QLineEdit*>("workbenchRange");auto run=workbench.findChild<QPushButton*>("workbenchRun");
   auto pump=[&](int ms){QElapsedTimer t;t.start();while(t.elapsed()<ms){app.processEvents();QThread::msleep(1);}};
@@ -124,15 +189,30 @@ int main(int argc,char** argv) {
   auto execute=[&](QString path){
    if(QFileInfo(path).isDir())path=QDir(path).filePath("first.pdf");
    bool prompted=false;QTimer::singleShot(0,[&,path]{auto dialog=qobject_cast<QFileDialog*>(QApplication::activeModalWidget());require(dialog,"save dialog shown");require(dialog->directory().absolutePath()==QDir::fromNativeSeparators(dest->text()),"save dialog starts in configured folder");prompted=true;dialog->setDirectory(QFileInfo(path).absolutePath());dialog->selectFile(QFileInfo(path).fileName());QMetaObject::invokeMethod(dialog,"accept");});
-   run->click();require(prompted,"save requests output name");QElapsedTimer timer;timer.start();while(!run->isEnabled() && timer.elapsed()<20000)pump(5);require(run->isEnabled(),"UI export completes");require(workbench.findChild<QLabel*>("workbenchStatus")->text().startsWith(english ? "Done." : "Listo."),qPrintable(workbench.findChild<QLabel*>("workbenchStatus")->text()));require(reveal->isEnabled() && QFileInfo::exists(reveal->toolTip()),"last saved output can be revealed");
+   run->click();require(prompted,"save requests output name");QElapsedTimer timer;timer.start();while(!run->isEnabled() && timer.elapsed()<20000)pump(5);require(run->isEnabled(),"UI export completes");require(workbench.findChild<QLabel*>("workbenchStatus")->text().startsWith(english ? "Done." : "Listo."),qPrintable(workbench.findChild<QLabel*>("workbenchStatus")->text()));require(reveal->isEnabled() && reveal->toolTip().isEmpty(),"last saved output can be revealed");
   };
   pages->item(1)->setSelected(true);dynamic_cast<WorkbenchPageList*>(pages)->moveSelectionTo(0);
   require(files->item(0)->data(Qt::UserRole)==pages->item(0)->data(Qt::UserRole),"thumbnail reorder synchronizes file list");
+  require(files->currentRow()==pages->currentRow() &&
+          files->currentItem()->data(Qt::UserRole)==pages->currentItem()->data(Qt::UserRole),
+          "thumbnail reorder keeps list selection on moved document");
   execute(temp.filePath("ui-merge.pdf"));require(reopened.open(temp.filePath("ui-merge.pdf")) && reopened.pageCount()==7 && reopened.pageText(0).contains("Second"),"UI merge respects thumbnail order");pages->clearSelection();pages->item(1)->setSelected(true);dynamic_cast<WorkbenchPageList*>(pages)->moveSelectionTo(0);files->setCurrentRow(0);
-  tools->setCurrentRow(Workbench::Split);files->setCurrentRow(0);workbench.findChild<QSpinBox*>("workbenchChunk")->setValue(2);QDir().mkpath(temp.filePath("parts"));execute(temp.filePath("parts"));
+  tools->setCurrentRow(Workbench::Split);files->setCurrentRow(0);workbench.findChild<QComboBox*>("workbenchSplitMode")->setCurrentIndex(0);workbench.findChild<QSpinBox*>("workbenchChunk")->setValue(2);QDir().mkpath(temp.filePath("parts"));execute(temp.filePath("parts"));
   require(reopened.open(temp.filePath("parts/first_003.pdf")) && reopened.pageCount()==1,"UI split remainder");
   workbench.findChild<QComboBox*>("workbenchSplitMode")->setCurrentIndex(1);workbench.findChild<QLineEdit*>("workbenchGroups")->setText("1-2; 5,3");QDir().mkpath(temp.filePath("groups"));execute(temp.filePath("groups"));require(reopened.open(temp.filePath("groups/first_002.pdf")) && reopened.pageCount()==2 && reopened.pageText(0).contains("Page 5"),"UI split custom groups");
-  tools->setCurrentRow(Workbench::Remove);range->setText("2,4");execute(temp.filePath("ui-remove.pdf"));require(reopened.open(temp.filePath("ui-remove.pdf")) && reopened.pageCount()==3 && reopened.pageText(1).contains("Page 3"),"UI remove");
+  tools->setCurrentRow(Workbench::Remove);range->setText("2,4");
+  QMetaObject::invokeMethod(range,"editingFinished");
+  range->setText("2-");
+  QMetaObject::invokeMethod(range,"editingFinished");
+  auto rangeStatus=workbench.findChild<QLabel*>("workbenchStatus");
+  require(pages->selectedItems().isEmpty() && !pages->item(1)->font().strikeOut() &&
+          !rangeStatus->text().isEmpty(),"invalid range clears stale preview");
+  range->setText("2,4");
+  QMetaObject::invokeMethod(range,"editingFinished");
+  require(rangeStatus->text().isEmpty(),"valid range clears previous validation error");
+  require(pages->item(1)->font().strikeOut() && pages->item(3)->data(Qt::UserRole+2).toBool() &&
+          !pages->item(0)->data(Qt::UserRole+2).toBool(),"remove preview marks excluded pages");
+  execute(temp.filePath("ui-remove.pdf"));require(reopened.open(temp.filePath("ui-remove.pdf")) && reopened.pageCount()==3 && reopened.pageText(1).contains("Page 3"),"UI remove");
   tools->setCurrentRow(Workbench::Extract);range->setText("5,1,3-4");execute(temp.filePath("ui-extract.pdf"));require(reopened.open(temp.filePath("ui-extract.pdf")) && reopened.pageCount()==4 && reopened.pageText(0).contains("Page 5"),"UI extract range order");
   tools->setCurrentRow(Workbench::Organize);pages->item(4)->setSelected(true);dynamic_cast<WorkbenchPageList*>(pages)->moveSelectionTo(0);auto last=pages->item(0);require(last->data(Qt::UserRole).toInt()==4 && pages->selectedItems().size()==1,"drag reorder preserves selection and page identity");workbench.findChild<QPushButton*>("workbenchRotate")->click();
   execute(temp.filePath("ui-organize.pdf"));require(reopened.open(temp.filePath("ui-organize.pdf")) && reopened.pageText(0).contains("Page 5") && reopened.pageSize(0).width()>reopened.pageSize(0).height(),"UI organize and rotate");
@@ -144,6 +224,80 @@ int main(int argc,char** argv) {
   }
   tools->setCurrentRow(Workbench::Ocr);execute(temp.filePath("ui-native-text.pdf"));require(reopened.open(temp.filePath("ui-native-text.pdf")) && reopened.pageText(0).contains("Page 1"),"UI OCR preserves existing text");
   const auto nativeSnapshot=temp.filePath("current.pdf");a->setPage(0);require(a->note({40,500},"Unsaved workbench note"),"unsaved note");workbench.useSnapshot(*a,"Current PDF",first);tools->setCurrentRow(Workbench::Extract);range->setText("1");execute(nativeSnapshot);require(reopened.open(nativeSnapshot) && reopened.annotationCount()==1,"current PDF includes unsaved annotations");
+  workbench.importFiles({restrictedPath});
+  files->setCurrentRow(files->count()-1);
+  tools->setCurrentRow(Workbench::Organize);
+  pages->item(0)->setSelected(true);
+  workbench.findChild<QPushButton*>("workbenchRotate")->click();
+  const auto rotatedRestricted=temp.filePath("restricted-rotated.pdf");
+  execute(rotatedRestricted);
+  const auto originalSize=restricted->pageSize(0);
+  require(reopened.open(rotatedRestricted) &&
+          reopened.properties().contains({gpdfTr("Seguridad"),gpdfTr("Sin cifrado")}) &&
+          reopened.pageSize(0)==originalSize.transposed(),"rotate and export without source encryption");
+  require(digest(restrictedPath)==restrictedHash,"restricted source is unchanged");
+  const auto encryptedPath=QString(GPDF_SOURCE_DIR)+"/tests/data/annotations-restricted.pdf";
+  const int count=files->count();
+  workbench.importFiles({encryptedPath});
+  require(files->count()==count,"Workbench skips encrypted file requiring an opening password");
+  PdfDocument encrypted;
+  require(encrypted.open(encryptedPath,"read-only"),"load encrypted fixture in reader");
+  workbench.useSnapshot(encrypted,"Opened in reader",encryptedPath);
+  require(files->count()==count+1,"use previously opened encrypted PDF without another password request");
+  {
+   Workbench currentPdf;
+   auto stack=currentPdf.findChild<QListWidget*>("workbenchFiles");
+   auto previews=currentPdf.findChild<QListWidget*>("workbenchPages");
+   auto modes=currentPdf.findChild<QListWidget*>("workbenchTools");
+   auto useCurrent=currentPdf.findChild<QPushButton*>("workbenchUseCurrent");
+   currentPdf.setCurrentDocument([&](Workbench& target){target.useSnapshot(*a,"Current snapshot",first);});
+   useCurrent->click();
+   require(stack->count()==1 && previews->count()==1 &&
+           stack->currentRow()==0 && previews->currentRow()==0 &&
+           previews->item(0)->text()=="Current snapshot","current PDF refreshes empty merge view");
+   currentPdf.importFiles({second});
+   useCurrent->click();
+   require(stack->count()==3 && previews->count()==3 &&
+           stack->currentRow()==2 && previews->currentRow()==2 &&
+           stack->currentItem()->data(Qt::UserRole)==previews->currentItem()->data(Qt::UserRole),
+           "current PDF refreshes existing merge stack and selects added snapshot");
+   for(int mode=Workbench::Split;mode<=Workbench::Ocr;++mode){
+    modes->setCurrentRow(mode);
+    useCurrent->click();
+    require(stack->currentRow()==stack->count()-1 && previews->count()==a->pageCount(),
+            "current PDF refreshes pages in each operation");
+   }
+  }
+  {
+   Workbench deleting;
+   deleting.importFiles({first,second,first});
+   deleting.show();deleting.activateWindow();
+   auto previews=deleting.findChild<QListWidget*>("workbenchPages");
+   auto stack=deleting.findChild<QListWidget*>("workbenchFiles");
+   previews->setFocus();app.processEvents();
+   previews->setCurrentRow(0);
+   previews->item(1)->setSelected(true);
+   QCursor::setPos(previews->viewport()->mapToGlobal(previews->visualItemRect(previews->item(0)).center()));
+   QKeyEvent removeSelection(QEvent::KeyPress,Qt::Key_Delete,Qt::NoModifier);
+   QApplication::sendEvent(previews,&removeSelection);app.processEvents();
+   require(stack->count()==1 && previews->count()==1,"Delete removes selected documents from stack and thumbnails");
+   previews->clearSelection();
+   QCursor::setPos(previews->viewport()->mapToGlobal(previews->visualItemRect(previews->item(0)).center()));
+   QKeyEvent removeHovered(QEvent::KeyPress,Qt::Key_Delete,Qt::NoModifier);
+   QApplication::sendEvent(previews,&removeHovered);app.processEvents();
+   require(stack->count()==0 && previews->count()==0 &&
+           !deleting.findChild<QPushButton*>("workbenchRun")->isEnabled(),"Delete removes hovered document and handles empty stack");
+   deleting.importFiles({first});
+   deleting.findChild<QListWidget*>("workbenchTools")->setCurrentRow(Workbench::Organize);
+   previews->setFocus();
+   previews->setCurrentRow(0);
+   previews->item(1)->setSelected(true);
+   QCursor::setPos(previews->viewport()->mapToGlobal(previews->visualItemRect(previews->item(0)).center()));
+   QKeyEvent removePages(QEvent::KeyPress,Qt::Key_Delete,Qt::NoModifier);
+   QApplication::sendEvent(previews,&removePages);app.processEvents();
+   require(previews->count()==3 && stack->count()==1 &&
+           previews->item(0)->data(Qt::UserRole).toInt()==2,"Delete in Organize removes selected pages while retaining document");
+  }
   require(digest(first)==originalHash,"source PDF unchanged after all operations");
   for(const auto& arg:app.arguments())if(arg.startsWith("--snapshot-dir=")){
    QDir folder(arg.mid(15));folder.mkpath(".");files->setCurrentRow(0);

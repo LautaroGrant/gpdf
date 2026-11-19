@@ -78,6 +78,11 @@ Name: "desktopicon"; Description: "{cm:DesktopIcon}"; Flags: unchecked
 [Files]
 Source: "{#PackageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+Type: files; Name: "{app}\README.md"
+Type: files; Name: "{app}\README.es.md"
+Type: files; Name: "{app}\CHANGELOG.md"
+
 #ifndef SmokeTest
 [Icons]
 Name: "{autoprograms}\GPDF"; Filename: "{app}\GPDF.exe"; WorkingDir: "{app}"

@@ -818,6 +818,10 @@ int main(int argc,char** argv) {
         next->trigger(); require(view->pdf.pageIndex()==1,"single navigation advances one page");
         previous->trigger();
         mode->setCurrentIndex(0);
+        scroll->verticalScrollBar()->setValue(200);
+        window.findChild<QAction*>("goPrevious")->trigger();
+        require(view->pdf.pageIndex()==0 && scroll->verticalScrollBar()->value()==int(view->activeRect().top()),
+                "left on first page returns to page start");
         require(view->pdf.pageIndex()==0 && list->count()==2,"switching views preserves page annotations");
         view->tool=PageView::Select;
         require(!edit->isEnabled() && !remove->isEnabled(),"actions disabled without selection");
@@ -992,6 +996,8 @@ int main(int argc,char** argv) {
         {
             auto professional=window.findChild<QAction*>("professionalModeAction");
             professional->trigger();
+            window.findChild<QAction*>("cancelContextAction")->trigger();
+            require(professional->isChecked(),"Escape action keeps professional mode enabled");
             {
                 Window restored;
                 require(restored.findChild<QAction*>("professionalModeAction")->isChecked(),"professional mode restored in a new window");

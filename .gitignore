@@ -13,6 +13,7 @@
 !/tests/data/bookmarks.pdf
 !/tests/data/invalid-last-page.pdf
 !/tests/data/recovery-encrypted.pdf
+!/tests/data/workbench-restricted.pdf
 *.pfx
 *.p12
 /tmp/

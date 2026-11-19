@@ -18,6 +18,7 @@
 // PDFium calls are serialized with apiMutex(); background reads validate revision().
 class PdfDocument {
     friend class WorkbenchPdf;
+    friend class Workbench;
     friend class DocumentTransfer;
 public:
     struct AnnotationEntry { int page; int index; int type; QString text; bool operator==(const AnnotationEntry&) const = default; };
@@ -168,7 +169,9 @@ private:
     mutable int hoverIndex_ = -1;
     mutable std::unique_ptr<QCache<int,QVector<QRectF>>> hoverRegions_=std::make_unique<QCache<int,QVector<QRectF>>>(2*1024*1024);
     QByteArray bytes_;
-    QByteArray diskDigest_;
+    QByteArray diskDigest() const;
+    mutable QByteArray diskDigest_;
+    mutable QByteArray originalBytesForDigest_;
     QByteArray password_;
     int index_ = 0;
     bool dirty_ = false;

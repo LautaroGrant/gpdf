@@ -28,7 +28,11 @@ if ($Package) {
     if ($LASTEXITCODE) { throw 'Falló el empaquetado.' }
     New-Item -ItemType Directory -Force "$dist/tls" | Out-Null
     Copy-Item -LiteralPath "$build/tls/qschannelbackend.dll" -Destination "$dist/tls/" -Force
-    Copy-Item "$root/README.md","$root/README.es.md","$root/CHANGELOG.md","$root/VERSION" $dist
+    foreach ($name in @('README.md','README.es.md','CHANGELOG.md')) {
+        $legacyFile = Join-Path $dist $name
+        if (Test-Path -LiteralPath $legacyFile -PathType Leaf) { Remove-Item -LiteralPath $legacyFile }
+    }
+    Copy-Item "$root/VERSION" $dist
     $revision=& git -C $root rev-parse HEAD 2>$null
     $dirty=if($LASTEXITCODE -eq 0) { [bool](& git -C $root status --porcelain) } else { $null }
     [ordered]@{
