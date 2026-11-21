@@ -478,7 +478,19 @@ int PdfDocument::characterAt(QPointF p) const { std::lock_guard apiGuard(pdfiumM
         }
         return -1;
     }
-    return activeText() ? FPDFText_GetCharIndexAtPos(text_, p.x(), p.y(), 12, 12) : -1; }
+    if(!activeText()) return -1;
+    if(textAt(index_,p,0)) {
+        // Keep a click in a justified space on its own row before applying drag tolerance.
+        if(auto lines=hoverRegions_->object(index_)) {
+            for(const auto& line:*lines) if(line.contains(p)) {
+                int hit=FPDFText_GetCharIndexAtPos(text_,p.x(),p.y(),line.height()*1.8,0);
+                if(hit>=0) return hit;
+                break;
+            }
+        }
+    }
+    return FPDFText_GetCharIndexAtPos(text_,p.x(),p.y(),12,12);
+}
 QPair<int,int> PdfDocument::lineRange(int index) const {
     std::lock_guard guard(pdfiumMutex);
     const int count=characterCount();
@@ -657,6 +669,75 @@ QVector<PdfDocument::SearchMatch> PdfDocument::searchPage(int index,const QStrin
     }
     return matches;
 }
+static bool sameTextRow(const QRectF& a,const QRectF& b) {
+    double overlap=std::min(a.bottom(),b.bottom())-std::max(a.top(),b.top());
+    // A period occupies the foot of the row and a quote its upper edge.
+    // Compare the small glyph with the vertical band occupied by its neighbour.
+    const QRectF& small=a.height()<b.height() ? a : b;
+    const QRectF& tall=a.height()<b.height() ? b : a;
+    if(small.height()<0.65*tall.height() && small.width()<0.9*tall.height() &&
+       small.center().y()>=tall.top()-0.12*tall.height() &&
+       small.center().y()<=tall.bottom()+0.12*tall.height()) return true;
+    return overlap>=0.6*std::min(a.height(),b.height()) &&
+           std::abs(a.center().y()-b.center().y())<=0.35*std::max(a.height(),b.height());
+}
+static double horizontalGap(const QRectF& a,const QRectF& b) {
+    return std::max({0.0,b.left()-a.right(),a.left()-b.right()});
+}
+static QVector<QRectF> joinTextRuns(const QVector<QRectF>& result) {
+    // PDFium can split a visual line at font runs and omit the spaces between them.
+    // Join nearby runs on the same baseline, without spanning column-sized gaps.
+    QVector<QRectF> rects;
+    qsizetype rowEnd=0;
+    double gapRatio=0.85;
+    for(qsizetype i=0;i<result.size();++i) {
+        auto r=result[i].normalized(); if(r.isEmpty()) continue;
+        if(i>=rowEnd) {
+            QVector<double> gaps;
+            rowEnd=i+1;
+            while(rowEnd<result.size() && sameTextRow(r,result[rowEnd])) {
+                const auto& next=result[rowEnd];
+                double ratio=horizontalGap(result[rowEnd-1],next)/std::max(r.height(),next.height());
+                if(ratio>0.4 && ratio<=1.8) gaps.append(ratio);
+                ++rowEnd;
+            }
+            std::sort(gaps.begin(),gaps.end());
+            gapRatio=gaps.isEmpty() ? 0.85 : std::clamp(gaps[gaps.size()*3/4]*1.4,0.85,1.8);
+        }
+        bool joined=false;
+        if(!rects.isEmpty()) {
+            auto& line=rects.last();
+            if(sameTextRow(line,r) && horizontalGap(line,r)<=std::max(line.height(),r.height())*gapRatio) {
+                line=line.united(r); joined=true;
+            }
+        }
+        if(!joined) rects.append(r);
+    }
+    return rects;
+}
+static QVector<QRectF> textLines(FPDF_TEXTPAGE text,int first,int count) {
+    QVector<QRectF> runs;
+    int rectangles=FPDFText_CountRects(text,first,count);
+    for(int i=0;i<rectangles;++i) {
+        double left,top,right,bottom;
+        if(FPDFText_GetRect(text,i,&left,&top,&right,&bottom)) runs.append(QRectF(left,bottom,right-left,top-bottom));
+    }
+    auto lines=joinTextRuns(runs);
+    // Connect remaining pieces within this contiguous text range, keeping column gutters separate.
+    QVector<QRectF> bands;
+    for(const auto& piece:lines) {
+        if(!bands.isEmpty()) {
+            auto& band=bands.last();
+            const double h=std::max(band.height(),piece.height());
+            if(sameTextRow(band,piece) && horizontalGap(band,piece)<=1.8*h) {
+                band=band.united(piece);
+                continue;
+            }
+        }
+        bands.append(piece);
+    }
+    return bands;
+}
 bool PdfDocument::textAt(int index,QPointF point,double margin) const { std::lock_guard apiGuard(pdfiumMutex);
     if(!doc_ || index<0 || index>=pageCount()) return false;
     if(auto it=ocrPages_.constFind(index);it!=ocrPages_.cend()) {
@@ -670,39 +751,13 @@ bool PdfDocument::textAt(int index,QPointF point,double margin) const { std::loc
     if(index!=index_ && !hoverText_) hoverText_=FPDFText_LoadPage(hoverPage_);
     auto text=index==index_ ? activeText() : hoverText_;
     if(!text) return false;
-    auto& regions=freshRegions;
-    // PDFium's text rectangles span runs, including the spaces between words.
-    int count=FPDFText_CountRects(text,0,FPDFText_CountChars(text));
-    for(int i=0;i<count;++i) {
-        double left,top,right,bottom;
-        if(FPDFText_GetRect(text,i,&left,&top,&right,&bottom)) regions.append(QRectF(left,bottom,right-left,top-bottom));
-    }
-    const qsizetype cost=sizeof(QVector<QRectF>)+regions.capacity()*sizeof(QRectF);
-    if(cost<=hoverRegions_->maxCost()) { hoverRegions_->insert(index,new QVector<QRectF>(std::move(regions)),int(cost)); cachedRegions=hoverRegions_->object(index); }
+    freshRegions=textLines(text,0,FPDFText_CountChars(text));
+    const qsizetype cost=sizeof(QVector<QRectF>)+freshRegions.capacity()*sizeof(QRectF);
+    if(cost<=hoverRegions_->maxCost()) { hoverRegions_->insert(index,new QVector<QRectF>(std::move(freshRegions)),int(cost)); cachedRegions=hoverRegions_->object(index); }
     }
     margin=std::max(0.0,margin);
     for(const auto& r:cachedRegions ? *cachedRegions : freshRegions) if(r.adjusted(-margin,-margin,margin,margin).contains(point)) return true;
     return false;
-}
-static QVector<QRectF> joinTextRuns(const QVector<QRectF>& result) {
-    // PDFium can split a visual line at font runs and omit the spaces between them.
-    // Join nearby runs on the same baseline, without spanning column-sized gaps.
-    QVector<QRectF> rects;
-    for(const auto& raw:result) {
-        auto r=raw.normalized(); if(r.isEmpty()) continue;
-        bool joined=false;
-        if(!rects.isEmpty()) {
-            auto& line=rects.last();
-            double height=std::max(line.height(),r.height());
-            double overlap=std::min(line.bottom(),r.bottom())-std::max(line.top(),r.top());
-            double gap=std::max({0.0,r.left()-line.right(),line.left()-r.right()});
-            if(overlap>=0.6*std::min(line.height(),r.height()) && std::abs(line.center().y()-r.center().y())<=height*0.35 && gap<=height*0.85) {
-                line=line.united(r); joined=true;
-            }
-        }
-        if(!joined) rects.append(r);
-    }
-    return rects;
 }
 QVector<QRectF> PdfDocument::selectionRects(int first, int last) const { std::lock_guard apiGuard(pdfiumMutex);
     QVector<QRectF> result;
@@ -717,12 +772,7 @@ QVector<QRectF> PdfDocument::selectionRects(int first, int last) const { std::lo
     const int characters=FPDFText_CountChars(text_);
     if(first>=characters) return result;
     last=std::min(last,characters-1);
-    int count = FPDFText_CountRects(text_, first, last - first + 1);
-    for (int i = 0; i < count; ++i) {
-        double left, top, right, bottom;
-        if (FPDFText_GetRect(text_, i, &left, &top, &right, &bottom)) result.append(QRectF(left, bottom, right-left, top-bottom));
-    }
-    return joinTextRuns(result);
+    return textLines(text_,first,last-first+1);
 }
 QString PdfDocument::selectionText(int first, int last) const { std::lock_guard apiGuard(pdfiumMutex);
     if(auto it=ocrPages_.constFind(index_);it!=ocrPages_.cend()) {
@@ -988,7 +1038,8 @@ PdfDocument::TextStyle PdfDocument::annotationTextStyle(int index) const { std::
     FPDFPage_CloseAnnot(annot); return style;
 }
 bool PdfDocument::editAnnotation(int index,const QString& value,const TextStyle* requestedStyle) { std::lock_guard apiGuard(pdfiumMutex);
-    if (!canEditAnnotation(index)) return fail(gpdfTr("La anotación no se puede editar: selección inválida, tipo no admitido o protección del PDF."));
+    const int type=annotationType(index);
+    if ((type!=FPDF_ANNOT_TEXT && type!=FPDF_ANNOT_FREETEXT) || !canEditAnnotation(index)) return fail(gpdfTr("La anotación no se puede editar: selección inválida, tipo no admitido o protección del PDF."));
     if (value.trimmed().isEmpty()) return fail(gpdfTr("El texto no puede estar vacío. Usar Borrar para eliminar la anotación."));
     const QString oldContents=annotationContents(index);
     if (value==oldContents && !requestedStyle) return true;
@@ -1024,6 +1075,70 @@ bool PdfDocument::editAnnotation(int index,const QString& value,const TextStyle*
     FPDFPage_CloseAnnot(annot);
     if (ok) { dirty_=true; recordHistory(); }
     return ok;
+}
+bool PdfDocument::unifyHighlight(int index) {
+    std::lock_guard guard(pdfiumMutex);
+    if(!canEditAnnotation(index) || annotationType(index)!=FPDF_ANNOT_HIGHLIGHT || !activeText())
+        return fail(gpdfTr("No se pudo unificar el resaltado."));
+    auto annotation=FPDFPage_GetAnnot(page_,index);
+    QVector<QRectF> areas;
+    for(size_t i=0;i<FPDFAnnot_CountAttachmentPoints(annotation);++i) {
+        FS_QUADPOINTSF q{};
+        if(!FPDFAnnot_GetAttachmentPoints(annotation,i,&q) || q.x1!=q.x3 || q.x2!=q.x4 ||
+           q.y1!=q.y2 || q.y3!=q.y4) {
+            FPDFPage_CloseAnnot(annotation);
+            return fail(gpdfTr("No se pudo unificar el resaltado."));
+        }
+        areas.append(QRectF(QPointF(q.x1,q.y1),QPointF(q.x4,q.y4)).normalized());
+    }
+    QVector<bool> covered(areas.size(),false);
+    QVector<QRectF> bands;
+    int start=-1,last=-1;
+    auto finishRange=[&] {
+        if(start>=0) bands+=textLines(text_,start,last-start+1);
+        start=-1;
+    };
+    for(int i=0,n=FPDFText_CountChars(text_);i<n;++i) {
+        const auto ch=FPDFText_GetUnicode(text_,i);
+        if(!ch || QChar::isSpace(ch)) continue;
+        double l,r,b,t;
+        if(!FPDFText_GetCharBox(text_,i,&l,&r,&b,&t)) { finishRange(); continue; }
+        QPointF center((l+r)/2,(b+t)/2);
+        bool selected=false;
+        for(qsizetype j=0;j<areas.size();++j) if(areas[j].contains(center)) {
+            covered[j]=true;
+            selected=true;
+        }
+        if(selected) {
+            if(start<0) start=i;
+            last=i;
+        } else finishRange();
+    }
+    finishRange();
+    if(covered.contains(false) || bands.isEmpty()) {
+        FPDFPage_CloseAnnot(annotation);
+        return fail(gpdfTr("No se pudo unificar el resaltado."));
+    }
+    if(bands.size()>=areas.size()) {
+        FPDFPage_CloseAnnot(annotation);
+        return true;
+    }
+    // PDFium can append quads but cannot truncate their array. Reset the entry
+    // before appending so the same annotation keeps its identity and metadata.
+    bool ok=FPDFAnnot_SetAP(annotation,FPDF_ANNOT_APPEARANCEMODE_NORMAL,nullptr) &&
+            FPDFAnnot_SetStringValue(annotation,"QuadPoints",reinterpret_cast<FPDF_WIDESTRING>(u""));
+    QRectF bounds;
+    for(const auto& r:bands) {
+        FS_QUADPOINTSF q{float(r.left()),float(r.bottom()),float(r.right()),float(r.bottom()),
+                         float(r.left()),float(r.top()),float(r.right()),float(r.top())};
+        ok=ok && FPDFAnnot_AppendAttachmentPoints(annotation,&q);
+        bounds=bounds.united(r);
+    }
+    FS_RECTF rect{float(bounds.left()),float(bounds.bottom()),float(bounds.right()),float(bounds.top())};
+    ok=ok && FPDFAnnot_SetRect(annotation,&rect);
+    FPDFPage_CloseAnnot(annotation);
+    if(!ok) { restoreHistory(historyPosition_); return fail(gpdfTr("No se pudo unificar el resaltado.")); }
+    dirty_=true; recordHistory(); return true;
 }
 bool PdfDocument::recolorAnnotation(int index,const QColor& color) { std::lock_guard apiGuard(pdfiumMutex);
     if (!canColorAnnotation(index) || !color.isValid()) return fail(gpdfTr("Seleccionar un resaltado o un trazo editable y un color válido."));
@@ -1077,11 +1192,58 @@ QVector<QPair<QString,QString>> PdfDocument::properties() const { std::lock_guar
     return values;
 }
 
+// Assign each selected glyph once, using the whole visual line for paragraph geometry
+// even when the highlight begins or ends in the middle of it.
+static QString markupExcerpt(FPDF_TEXTPAGE text,FPDF_ANNOTATION annotation,const QVector<QRectF>& lines) {
+    QVector<QRectF> areas;
+    for(size_t i=0;i<FPDFAnnot_CountAttachmentPoints(annotation);++i) {
+        FS_QUADPOINTSF q{};
+        if(!FPDFAnnot_GetAttachmentPoints(annotation,i,&q)) continue;
+        double l=std::min({q.x1,q.x2,q.x3,q.x4}), r=std::max({q.x1,q.x2,q.x3,q.x4});
+        double b=std::min({q.y1,q.y2,q.y3,q.y4}), t=std::max({q.y1,q.y2,q.y3,q.y4});
+        areas.append(QRectF(l,b,r-l,t-b));
+    }
+    QVector<QString> words(lines.size());
+    int previous=-2,previousLine=-1;
+    for(int i=0,n=FPDFText_CountChars(text);i<n;++i) {
+        char32_t ch=FPDFText_GetUnicode(text,i);
+        if(!ch || QChar::isSpace(ch)) continue;
+        double l,r,b,t;
+        if(!FPDFText_GetCharBox(text,i,&l,&r,&b,&t)) continue;
+        QPointF center((l+r)/2,(b+t)/2);
+        if(std::none_of(areas.cbegin(),areas.cend(),[&](const QRectF& box){ return box.contains(center); })) continue;
+        for(int row=0;row<lines.size();++row) {
+            if(!lines[row].adjusted(-0.1,-0.1,0.1,0.1).contains(center)) continue;
+            auto& value=words[row];
+            if(!value.isEmpty() && (row!=previousLine || i!=previous+1)) value+=' ';
+            value+=QString::fromUcs4(&ch,1);
+            previous=i; previousLine=row;
+            break;
+        }
+    }
+    QString result;
+    int last=-1;
+    for(int row=0;row<lines.size();++row) {
+        if(words[row].isEmpty()) continue;
+        if(last>=0) {
+            const auto& a=lines[last]; const auto& b=lines[row];
+            double height=std::max(a.height(),b.height());
+            double step=a.center().y()-b.center().y();
+            bool continuation=step>0.35*height && step<=1.95*height && horizontalGap(a,b)==0 &&
+                !(b.left()>a.left()+height && a.right()<b.right()-height);
+            result+=continuation ? ' ' : '\n';
+        }
+        result+=words[row]; last=row;
+    }
+    return result;
+}
+
 QVector<PdfDocument::AnnotationEntry> PdfDocument::pageAnnotations(int index) const { std::lock_guard apiGuard(pdfiumMutex);
     if(auto cached=annotationPages_.constFind(index); cached!=annotationPages_.cend()) return cached.value();
     QVector<AnnotationEntry> entries;
         auto page=FPDF_LoadPage(doc_,index); if(!page) return entries;
         FPDF_TEXTPAGE pageText=nullptr;
+        QVector<QRectF> lines;
         for(int i=0;i<FPDFPage_GetAnnotCount(page);++i) {
             auto annotation=FPDFPage_GetAnnot(page,i); if(!annotation) continue;
             auto size=FPDFAnnot_GetStringValue(annotation,"Contents",nullptr,0);
@@ -1090,15 +1252,11 @@ QVector<PdfDocument::AnnotationEntry> PdfDocument::pageAnnotations(int index) co
             int type=FPDFAnnot_GetSubtype(annotation);
             QString contents=size ? QString::fromUtf16(reinterpret_cast<const char16_t*>(text.constData())) : QString();
             if(contents.isEmpty() && (type==FPDF_ANNOT_HIGHLIGHT || type==FPDF_ANNOT_UNDERLINE)) {
-                if(!pageText) pageText=FPDFText_LoadPage(page);
-                QStringList lines;
-                for(size_t q=0;pageText && q<FPDFAnnot_CountAttachmentPoints(annotation);++q) {
-                    FS_QUADPOINTSF quad{}; if(!FPDFAnnot_GetAttachmentPoints(annotation,q,&quad)) continue;
-                    double left=std::min({quad.x1,quad.x2,quad.x3,quad.x4}),right=std::max({quad.x1,quad.x2,quad.x3,quad.x4}),top=std::max({quad.y1,quad.y2,quad.y3,quad.y4}),bottom=std::min({quad.y1,quad.y2,quad.y3,quad.y4});
-                    int count=FPDFText_GetBoundedText(pageText,left,top,right,bottom,nullptr,0);
-                    if(count>0) { QVector<unsigned short> value(count+1); int written=FPDFText_GetBoundedText(pageText,left,top,right,bottom,value.data(),value.size()); lines.append(QString::fromUtf16(reinterpret_cast<const char16_t*>(value.constData()),written).remove(QChar(0))); }
+                if(!pageText) {
+                    pageText=FPDFText_LoadPage(page);
+                    if(pageText) lines=textLines(pageText,0,FPDFText_CountChars(pageText));
                 }
-                contents=lines.join('\n');
+                if(pageText) contents=markupExcerpt(pageText,annotation,lines);
             }
             entries.append({index,i,type,contents});
             FPDFPage_CloseAnnot(annotation);

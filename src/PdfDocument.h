@@ -118,6 +118,7 @@ public:
     QColor annotationColor(int index) const;
     TextStyle annotationTextStyle(int index) const;
     bool editAnnotation(int index, const QString& text, const TextStyle* style=nullptr);
+    bool unifyHighlight(int index);
     bool recolorAnnotation(int index, const QColor& color);
     bool removeAnnotation(int index);
     QString error() const { return error_; }

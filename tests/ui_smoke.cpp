@@ -1991,6 +1991,26 @@ int main(int argc,char** argv) {
             for(auto button:reader.findChildren<QPushButton*>()) if(button->text()=="Editar") { button->click(); break; } formatDialog.stop();
             require(formatted && canvas->pdf.copyAnnotation(0).strokeWidth==5 && canvas->pdf.annotationContents(0).isEmpty(),"Edit modifies underline format without creating a comment body");
             if(!output.isEmpty()) { canvas->workers.waitForDone(); app.processEvents(); reader.grab().save(output+"/underline-and-annotations.png"); }
+            canvas->first=8; canvas->last=14; highlight->trigger();
+            require(canvas->pdf.ink({{10,10},{40,40}}),"ink panel fixture");
+            reader.findChild<QComboBox*>("annotationTypeFilter")->setCurrentIndex(1);
+            auto editEntry=reader.findChild<QAction*>("editSelectedAnnotationAction");
+            for(int index:{1,2}) {
+                for(int row=0;row<list->count();++row)
+                    if(list->item(row)->data(Qt::UserRole+1).toInt()==index) list->setCurrentRow(row);
+                require(list->currentItem() && list->currentItem()->data(Qt::UserRole+1).toInt()==index &&
+                        !editEntry->isEnabled(),"drawing selection disables edit action");
+                bool openedEditor=false;
+                QTimer closeEditor; closeEditor.setSingleShot(true);
+                QObject::connect(&closeEditor,&QTimer::timeout,[&]{
+                    if(auto dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget())) { openedEditor=true; dialog->reject(); }
+                });
+                closeEditor.start(0);
+                list->itemActivated(list->currentItem());
+                closeEditor.stop();
+                require(!openedEditor,"activating drawing leaves text editor closed");
+            }
+
             reader.findChild<QAction*>("saveFileAction")->trigger(); require(reader.saveSession(true),"save underline reading session");
             Window next; next.restoreSession(); PageView* nextCanvas=nullptr; for(auto widget:next.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) nextCanvas=page;
             require(next.findChild<QTabBar*>("documentTabs")->count()==0 && next.findChild<QComboBox*>("annotationTypeFilter")->currentIndex()==0,"clean exit starts without old files or document filters");

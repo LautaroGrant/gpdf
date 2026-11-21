@@ -51,6 +51,51 @@ int main(int argc, char** argv) {
         }
         PdfDocument pdf;
         auto require=[&](bool ok,const char* step){ if(!ok) throw std::runtime_error(std::string(step)+": "+pdf.error().toStdString()); };
+        if(app.arguments().size()==3 && app.arguments()[1]=="--justified-probe") {
+            require(pdf.open(app.arguments()[2]) && pdf.setPage(2),"open annotated history page");
+            QStringList excerpts;
+            for(const auto& entry:pdf.pageAnnotations(2)) excerpts.append(entry.text);
+            for(const auto& excerpt:excerpts) std::cout<<excerpt.toUtf8().constData()<<std::endl;
+            auto combined=excerpts.join('|');
+            require(combined.contains("Esta innovadora máquina podía realizar cálculos matemáticos complejos"),"reflow justified highlight");
+            require(combined.contains("No fue hasta la década de 1990"),"reflow wrapped sentence");
+            require(combined.contains("la Máquina Diferencial"),"join fragmented words");
+            for(double x:{143.0,193.0}) {
+                QPointF gap(x,336);
+                require(pdf.textAt(2,gap,0) && pdf.characterAt(gap)>=0,"select inside justified gap");
+            }
+            require(pdf.setPage(10),"open fragmented page");
+            auto initial=pdf.render(2);
+            auto original=pdf.copyAnnotation(2).quads;
+            auto left=original[2],right=original[3];
+            QPoint gap(qRound(left.x2+right.x1),qRound(2*pdf.pageSize().height()-left.y1-left.y3));
+            auto color=pdf.annotationColor(2);
+            require(pdf.unifyHighlight(2) && pdf.copyAnnotation(2).quads.size()==7,"one band per paragraph line");
+            require(pdf.annotationColor(2)==color && pdf.render(2).pixel(gap)!=initial.pixel(gap),"repair changes appearance and keeps color");
+            require(pdf.undo() && pdf.copyAnnotation(2).quads.size()==17 && pdf.render(2)==initial,"undo repair");
+            require(pdf.redo() && pdf.unifyHighlight(4) && pdf.copyAnnotation(4).quads.size()==1,"join names");
+            QTemporaryDir repaired;
+            auto path=repaired.filePath("repaired.pdf");
+            require(pdf.saveCopy(path) && pdf.open(path) && pdf.setPage(10) &&
+                    pdf.copyAnnotation(2).quads.size()==7 && pdf.copyAnnotation(4).quads.size()==1,"persist bands");
+            auto firstWord=pdf.searchPage(10,"Para conceptualizar");
+            auto lastWord=pdf.searchPage(10,"rendimiento de la red");
+            auto finalWord=pdf.searchPage(10,"neuronal.");
+            require(!firstWord.isEmpty() && !lastWord.isEmpty(),"locate orchestra paragraph");
+            auto endWord=std::find_if(finalWord.cbegin(),finalWord.cend(),[&](const auto& m){return m.first>lastWord.first().first;});
+            require(endWord!=finalWord.cend() && pdf.highlight(firstWord.first().first,endWord->first+endWord->count-1) &&
+                    pdf.copyAnnotation(pdf.annotationCount()-1).quads.size()==7,"continuous new highlight");
+            require(pdf.setPage(16),"open punctuation case");
+            auto start=pdf.searchPage(16,"En su esencia");
+            auto end=pdf.searchPage(16,"antes inimaginables.");
+            require(!start.isEmpty() && !end.isEmpty(),"locate paragraph on page 17");
+            require(pdf.highlight(start.first().first,end.first().first+end.first().count-1),"highlight paragraph");
+            auto paragraph=pdf.pageAnnotations(16).last().text;
+            std::cout<<paragraph.toUtf8().constData()<<std::endl;
+            require(paragraph.contains("correlaciones, permitiendo") &&
+                    paragraph.contains("máquinas \"aprendan\" y se adapten a nueva información. Esta capacidad"),"keep punctuation inline");
+            return 0;
+        }
         if(app.arguments().size()==4 && app.arguments()[1]=="--highlight-probe") {
             require(pdf.open(app.arguments()[2]),"open highlight probe PDF");
             auto text=pdf.pageText(0); int first=text.indexOf("Analista de siniestros con"),last=text.indexOf("traduzco",first)+6;
@@ -118,6 +163,7 @@ int main(int argc, char** argv) {
         require(pdf.canEditAnnotation(1) && pdf.canEditAnnotation(2),"editable note and text");
         require(pdf.canColorAnnotation(0) && pdf.canColorAnnotation(3),"colorable highlight and ink");
         require(!pdf.canColorAnnotation(2),"free text has its own appearance");
+        require(!pdf.editAnnotation(0,"replacement") && !pdf.editAnnotation(3,"replacement"),"highlight and ink reject text edits");
         require(!pdf.editAnnotation(-1,"invalid") && !pdf.removeAnnotation(99),"invalid annotation index rejected");
         require(!pdf.editAnnotation(2,"  "),"empty edit rejected");
         require(!pdf.editAnnotation(2,QString("Texto largo ").repeated(2000)),"oversized edit rejected");
@@ -275,6 +321,7 @@ int main(int argc, char** argv) {
             int last=geometry.characterCount()-1; require(geometry.selectionRects(0,last).size()==3,"selection joins nearby font runs and keeps columns and lines separate");
             require(geometry.highlight(0,last),"highlight fragmented text"); auto copy=geometry.copyAnnotation(0);
             require(copy.quads.size()==3,"highlight merges adjacent runs but keeps columns and lines separate");
+            require(geometry.pageAnnotations(0).first().text=="Alpha Beta Gamma\nColumn\nSecond line","keep separate columns and paragraphs in excerpts");
             require(copy.color.alpha()==204,"default highlight alpha is eighty percent");
             require(geometry.saveCopy(directory+"/fragmented-highlighted.pdf") && geometry.open(directory+"/fragmented-highlighted.pdf") && geometry.copyAnnotation(0).quads.size()==3,"continuous highlight geometry persists");
         }

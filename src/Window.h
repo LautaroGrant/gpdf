@@ -71,6 +71,14 @@ public:
         deleteButton=new QPushButton(gpdfTr("Borrar"));
         buttons->addWidget(editButton); buttons->addWidget(colorButton); buttons->addWidget(deleteButton);
         panelLayout->addLayout(buttons);
+        unifyButton=new QPushButton(gpdfTr("Unificar resaltado"));
+        unifyButton->setEnabled(false);
+        panelLayout->addWidget(unifyButton);
+        connect(unifyButton,&QPushButton::clicked,this,[this]{
+            int row=selectedAnnotationIndex();
+            if(!pdf.unifyHighlight(row)) error(pdf.error());
+            else refresh(row);
+        });
         panelLayout->addWidget(exportButton);
         connect(editButton,&QPushButton::clicked,[this]{ editSelected(); });
         connect(colorButton,&QPushButton::clicked,[this]{ colorSelected(); });
@@ -252,7 +260,8 @@ public:
         removeAction->setShortcut(QKeySequence()); removeAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         annotations->addAction(removeAction);
         connect(removeAction,&QAction::triggered,[this]{ deleteSelected(); });
-        auto editAction=new QAction(annotations);
+        editAction=new QAction(annotations);
+        editAction->setEnabled(false);
         editAction->setObjectName("editSelectedAnnotationAction");
         editAction->setShortcut(QKeySequence()); editAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         annotations->addAction(editAction);
@@ -2076,7 +2085,9 @@ private:
         const QPoint center=viewport->mapTo(this,viewport->rect().center());
         fileDropHint->move(center-QPoint(fileDropHint->width()/2,fileDropHint->height()/2));
     }
+    QAction* editAction=nullptr;
     QPushButton* editButton;
+    QPushButton* unifyButton;
     QPushButton* colorButton;
     QPushButton* deleteButton;
     QLabel* pageLabel;
@@ -2368,9 +2379,12 @@ private:
         }
         view->selectedAnnotation=index;
         if(index>=0) { view->first=view->last=-1; view->allTextSelected=false; }
-        editButton->setEnabled(pdf.canEditAnnotation(index));
+        bool editable=hasAnnotationEditor(index);
+        editButton->setEnabled(editable);
+        if(editAction) editAction->setEnabled(editable);
         deleteButton->setEnabled(pdf.canEditAnnotation(index));
         colorButton->setEnabled(pdf.canColorAnnotation(index));
+        unifyButton->setEnabled(pdf.annotationType(index)==FPDF_ANNOT_HIGHLIGHT && pdf.canEditAnnotation(index));
         view->update();
         if(index>=0) {
             auto point=view->devicePoint(pdf.annotationRect(index).center());
@@ -2379,9 +2393,13 @@ private:
             updatingView=previous;
         }
     }
+    bool hasAnnotationEditor(int index) const {
+        int type=pdf.annotationType(index);
+        return (type==FPDF_ANNOT_TEXT || type==FPDF_ANNOT_FREETEXT || type==FPDF_ANNOT_UNDERLINE) && pdf.canEditAnnotation(index);
+    }
     void editSelected() {
         int row=selectedAnnotationIndex();
-        if(!pdf.canEditAnnotation(row)) return;
+        if(!hasAnnotationEditor(row)) return;
         if(pdf.annotationType(row)==FPDF_ANNOT_UNDERLINE) {
             QDialog dialog(this); dialog.setObjectName("underlineFormatDialog"); dialog.setWindowTitle(gpdfTr("Editar subrayado")); auto form=new QFormLayout(&dialog);
             QColor color=pdf.annotationColor(row); auto choose=new QPushButton(gpdfTr("Elegir color…")); choose->setObjectName("underlineFormatColor"); form->addRow(gpdfTr("Color:"),choose);

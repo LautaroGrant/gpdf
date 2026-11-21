@@ -2,6 +2,8 @@
 <TS version="2.1" language="en_US" sourcelanguage="es">
   <context>
     <name>GPDF</name>
+    <message><source>Unificar resaltado</source><translation>Unify highlight</translation></message>
+    <message><source>No se pudo unificar el resaltado.</source><translation>Could not unify the highlight.</translation></message>
     <message>
       <source>Modo profesional</source>
       <translation>Professional mode</translation>
