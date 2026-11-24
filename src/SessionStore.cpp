@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QSet>
+#include <QUuid>
 
 QJsonObject SessionStore::read(const QDir& root) {
     QFile file(root.filePath("session.json"));
@@ -19,6 +20,9 @@ bool SessionStore::write(const QDir& root,const QJsonObject& manifest) {
     // Only discard obsolete backups after the new manifest has committed.
     QSet<QString> retained;
     for(auto item:manifest["documents"].toArray()) retained.insert(item.toObject()["backup"].toString());
-    for(const auto& name:root.entryList({"*.pdf"},QDir::Files)) if(!retained.contains(name)) QFile::remove(root.filePath(name));
+    for(const auto& name:root.entryList({"*.pdf"},QDir::Files)) {
+        const QUuid id(name.chopped(4));
+        if(!id.isNull() && !retained.contains(name)) QFile::remove(root.filePath(name));
+    }
     return true;
 }

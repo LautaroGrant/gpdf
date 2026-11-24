@@ -483,15 +483,16 @@ int main(int argc,char** argv) {
                 reader.showNormal(); app.processEvents();
             }
 #endif
-            for(int choice:{3,0,1}) {
+            for(int choice:{4,0,1,2}) {
                 canvas->first=0; canvas->last=5; canvas->setFocus();
                 auto selected=canvas->pdf.selectionText(0,5); require(!selected.isEmpty(),"context fixture has selected text");
                 int before=canvas->pdf.annotationCount(); bool shown=false;
                 QTimer::singleShot(0,[&]{
                     auto menu=reader.findChild<QMenu*>("selectionContextMenu");
-                    require(menu && menu->actions().size()==4,"selection menu contains two annotation actions, separator and copy");
+                    require(menu && menu->actions().size()==5,"selection menu contains three annotation actions, separator and copy");
                     auto actions=menu->actions();
-                    require(actions[0]->text()=="Resaltar" && actions[1]->text()=="Subrayar" && actions[2]->isSeparator() && actions[3]->text()=="Copiar","selection context action order");
+                    require(actions[0]->text()=="Resaltar" && actions[1]->text()=="Resaltar secundario" && actions[2]->text()=="Subrayar" && actions[3]->isSeparator() && actions[4]->text()=="Copiar","selection context action order");
+                    require(actions[1]->icon().pixmap(20,20).toImage()==QIcon(new GpdfToolIcon(4,canvas->secondaryHighlightColor)).pixmap(20,20).toImage(),"secondary highlight uses the selected color in the marker icon");
                     shown=true;
                     if(!output.isEmpty()) menu->grab().save(output+"/selection-context.png");
                     auto action=actions[choice]; menu->close(); action->trigger();
@@ -500,9 +501,10 @@ int main(int argc,char** argv) {
                 QContextMenuEvent event(QContextMenuEvent::Mouse,point,canvas->mapToGlobal(point));
                 QApplication::sendEvent(canvas,&event);
                 require(shown,"right click opens selected text menu");
-                if(choice==3) require(QApplication::clipboard()->text()==selected && canvas->first==0 && canvas->last==5,"context copy preserves selection and copies text");
+                if(choice==4) require(QApplication::clipboard()->text()==selected && canvas->first==0 && canvas->last==5,"context copy preserves selection and copies text");
                 else {
-                    require(canvas->pdf.annotationCount()==before+1 && canvas->pdf.annotationType(before)==(choice==0 ? FPDF_ANNOT_HIGHLIGHT : FPDF_ANNOT_UNDERLINE),"context creates requested annotation");
+                    require(canvas->pdf.annotationCount()==before+1 && canvas->pdf.annotationType(before)==(choice==2 ? FPDF_ANNOT_UNDERLINE : FPDF_ANNOT_HIGHLIGHT),"context creates requested annotation");
+                    if(choice==1) require(canvas->pdf.annotationColor(before).rgb()==canvas->secondaryHighlightColor.rgb(),"context uses secondary highlight color");
                     reader.findChild<QAction*>("undoAction")->trigger();
                     require(canvas->pdf.annotationCount()==before,"context annotation can be undone");
                 }
@@ -585,8 +587,10 @@ int main(int argc,char** argv) {
         }
         auto searchPanelControls=window.findChild<QWidget*>("searchPanel");
         for(auto button:searchPanelControls->findChildren<QPushButton*>()) require(button->text()!="×","search panel omits close button");
-        auto annotationsLayout=qobject_cast<QVBoxLayout*>(window.findChild<QWidget*>("annotationsPanel")->layout());
+        auto annotationsPanel=window.findChild<QWidget*>("annotationsPanel");
+        auto annotationsLayout=qobject_cast<QVBoxLayout*>(annotationsPanel->layout());
         require(annotationsLayout->itemAt(annotationsLayout->count()-1)->widget()==window.findChild<QPushButton*>("exportFromAnnotations"),"export annotations is the bottom panel control");
+        require(annotationsPanel->findChildren<QPushButton*>().size()==1,"annotation panel has no editing button row");
         auto iconToolbar=window.findChild<QToolBar*>("editingTools");
         for(int tool=0;tool<5;++tool) {
             auto action=window.findChild<QAction*>(tool<4 ? QString("editTool%1").arg(tool) : QString("highlightAction"));
@@ -713,9 +717,9 @@ int main(int argc,char** argv) {
         scope->setCurrentIndex(1);
         PageView* view=nullptr;
         for(auto widget:window.findChildren<QWidget*>()) if(auto page=dynamic_cast<PageView*>(widget)) { view=page; break; }
-        auto button=[&](QString label){ for(auto b:window.findChildren<QPushButton*>()) if(b->text()==label) return b; return static_cast<QPushButton*>(nullptr); };
-        auto edit=button("Editar"), remove=button("Borrar"), color=button("Color");
-        require(list && view && edit && remove && color,"UI controls available");
+        auto edit=window.findChild<QAction*>("editSelectedAnnotationAction");
+        auto remove=window.findChild<QAction*>("deleteSelectionAction");
+        require(list && view && edit && remove,"UI controls available");
         for(int tool=0;tool<5;++tool) {
             QKeyEvent key(QEvent::KeyPress,Qt::Key_F1+tool,Qt::NoModifier); QApplication::sendEvent(view,&key);
             require(view->tool==PageView::Tool(tool) && window.findChild<QAction*>(QString("editTool%1").arg(tool))->isChecked(),"function keys select editing tools and preserve active indication");
@@ -733,8 +737,8 @@ int main(int argc,char** argv) {
         require(zoomPlus && zoomMinus,"zoom buttons available");
         zoomPlus->trigger(); require(zoomPercent->value()==110 && qFuzzyCompare(view->scale,1.10),"toolbar plus advances ten percentage points");
         zoomMinus->trigger(); require(zoomPercent->value()==100 && view->scale==1.0,"toolbar minus decreases ten percentage points");
-        zoomPercent->setValue(50); zoomMinus->trigger(); require(zoomPercent->value()==50,"zoom lower limit");
-        zoomPercent->setValue(300); zoomPlus->trigger(); require(zoomPercent->value()==300,"zoom upper limit");
+        zoomPercent->setValue(10); zoomMinus->trigger(); require(view->scale==0.10 && zoomPercent->value()==10,"zoom lower limit");
+        zoomPercent->setValue(500); zoomPlus->trigger(); require(view->scale==5.0 && zoomPercent->value()==500,"zoom upper limit");
         zoomPercent->setValue(125);
         auto mode=window.findChild<QComboBox*>("viewMode");
         require(mode && mode->itemText(0)=="Vista continua","continuous view label");
@@ -760,6 +764,7 @@ int main(int argc,char** argv) {
         auto results=window.findChild<QListWidget*>("searchResults");
         auto searchToggle=window.findChild<QAction*>("searchAction");
         require(find && searchPanel && searchInput && results && searchToggle,"search UI available");
+        require(window.findChild<QLabel*>("searchStatus")->text().isEmpty(),"empty search starts with no status message");
         find->trigger();
         require(!searchPanel->isHidden(),"find opens left panel");
         searchInput->setText("SELECT");
@@ -824,12 +829,12 @@ int main(int argc,char** argv) {
                 "left on first page returns to page start");
         require(view->pdf.pageIndex()==0 && list->count()==2,"switching views preserves page annotations");
         view->tool=PageView::Select;
-        require(!edit->isEnabled() && !remove->isEnabled(),"actions disabled without selection");
+        require(!edit->isEnabled(),"edit disabled without selection");
         list->setCurrentRow(1);
-        require(edit->isEnabled() && remove->isEnabled() && !color->isEnabled(),"text selection enables correct actions");
+        require(edit->isEnabled() && view->pdf.canEditAnnotation(1) && !view->pdf.canColorAnnotation(1),"text selection enables correct actions");
         require(view->selectedAnnotation==1,"selection marks page annotation");
         QTimer::singleShot(0,[]{ auto dialog=qobject_cast<QInputDialog*>(QApplication::activeModalWidget()); if(dialog) { dialog->setTextValue("Texto editado desde interfaz"); dialog->accept(); } });
-        edit->click();
+        edit->trigger();
         require(list->count()==2 && list->item(1)->text().contains("Texto editado desde interfaz"),"dialog updates selected text");
         require(window.windowTitle().contains("*"),"title indicates pending changes");
         QAction* save=nullptr;
@@ -838,12 +843,12 @@ int main(int argc,char** argv) {
         QKeyEvent saveKey(QEvent::KeyPress,Qt::Key_G,Qt::ControlModifier); QApplication::sendEvent(view,&saveKey);
         require(!view->pdf.dirty() && !window.windowTitle().contains("*"),"in-place save clears pending changes");
         QTimer::singleShot(0,[]{ if(auto dialog=qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) dialog->reject(); });
-        edit->click();
+        edit->trigger();
         require(list->count()==2 && list->item(1)->text().contains("Texto editado desde interfaz"),"cancel preserves text");
-        remove->click();
+        remove->trigger();
         require(list->count()==1 && list->currentRow()==0 && list->item(0)->text().contains("Comentario original"),"delete selects remaining neighbor");
-        remove->click();
-        require(list->count()==0 && view->selectedAnnotation==-1 && !edit->isEnabled() && !remove->isEnabled(),"last deletion clears selection and actions");
+        remove->trigger();
+        require(list->count()==0 && view->selectedAnnotation==-1 && !edit->isEnabled(),"last deletion clears selection and actions");
         require(view->pdf.saveCopy(directory.path()+"/views.pdf"),"save annotations after view changes");
         require(view->pdf.open(directory.path()+"/views.pdf") && view->pdf.setPage(1),"reopen second page");
         require(view->pdf.annotationCount()==1 && view->pdf.annotationContents(0)=="Nota de página dos","second-page note persists after deleting first-page annotations");
@@ -960,7 +965,7 @@ int main(int argc,char** argv) {
         list->setCurrentRow(noteOnSecond);
         require(view->pdf.pageIndex()==1 && view->selectedAnnotation==0,"global annotation selection navigates to correct page");
         require(retainedAnnotation.isValid(),"navigation retains unchanged document annotation rows");
-        int totalAnnotations=list->count(); remove->click();
+        int totalAnnotations=list->count(); remove->trigger();
         require(view->pdf.annotationCount()==0 && list->count()==totalAnnotations-1,"global deletion affects correct page");
         view->setFocus(); auto undoAction=window.findChild<QAction*>("undoAction"); auto redoAction=window.findChild<QAction*>("redoAction");
         require(undoAction && redoAction,"history menu actions available");
@@ -1216,6 +1221,8 @@ int main(int argc,char** argv) {
         QApplication::sendEvent(view,&cycle); require(tabs->currentIndex()==1,"Ctrl Tab wraps documents");
         QKeyEvent backwards(QEvent::KeyPress,Qt::Key_Backtab,Qt::ControlModifier|Qt::ShiftModifier); QApplication::sendEvent(view,&backwards);
         require(tabs->currentIndex()==0,"Ctrl Shift Tab goes backwards");
+        QKeyEvent reverseFocus(QEvent::KeyPress,Qt::Key_Backtab,Qt::ShiftModifier); QApplication::sendEvent(view,&reverseFocus);
+        require(tabs->currentIndex()==0,"Shift Tab does not switch documents");
         auto autoTimer=window.findChild<QTimer*>("autoScrollTimer");
         auto scrollArea=window.findChild<QScrollArea*>();
         QPoint global=scrollArea->viewport()->mapToGlobal(scrollArea->viewport()->rect().center()),local=view->mapFromGlobal(global);
@@ -1346,7 +1353,7 @@ int main(int argc,char** argv) {
         window.findChild<QAction*>("propertiesAction")->trigger(); require(propertiesShown,"file properties show metadata and file details");
         bool shortcutsShown=false;
         QTimer::singleShot(0,[&]{ for(auto widget:QApplication::topLevelWidgets()) if(widget->objectName()=="shortcutsDialog") {
-            auto dialog=qobject_cast<QDialog*>(widget); auto table=dialog->findChild<QTableWidget*>("shortcutsTable"); shortcutsShown=table && table->rowCount()>30;
+            auto dialog=qobject_cast<QDialog*>(widget); auto table=dialog->findChild<QTableWidget*>("shortcutsTable"); shortcutsShown=table && table->rowCount()>30 && table->columnCount()==3;
             int f2Count=0; QHash<QString,QString> assignedShortcuts;
             int rotationCount=0;
             for(int row=0;row<table->rowCount();++row) {
@@ -1364,14 +1371,20 @@ int main(int argc,char** argv) {
             }
             require(f2Count==1 && window.findChild<QAction*>("editSelectedAnnotationAction")->shortcut().isEmpty(),"legacy invisible F2 does not conflict");
             require(rotationCount==1,"shortcut configuration has exactly one rotation action");
-            for(int row=0;row<table->rowCount();++row) if(table->item(row,0)->text()=="Final del documento") qobject_cast<QKeySequenceEdit*>(table->cellWidget(row,1))->setKeySequence(QKeySequence("Alt+End"));
+            for(int row=0;row<table->rowCount();++row) if(table->item(row,0)->text()=="Final del documento") {
+                qobject_cast<QKeySequenceEdit*>(table->cellWidget(row,1))->setKeySequence(QKeySequence("Alt+End"));
+                qobject_cast<QKeySequenceEdit*>(table->cellWidget(row,2))->setKeySequence(QKeySequence("Alt+Shift+End"));
+            }
             dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
         } });
         window.findChild<QAction*>("configureShortcutsAction")->trigger();
         require(shortcutsShown && window.findChild<QAction*>("goLast")->shortcut()==QKeySequence("Alt+End"),"shortcut dialog applies customization");
-        { Window restored; require(restored.findChild<QAction*>("goLast")->shortcut()==QKeySequence("Alt+End"),"custom shortcuts persist across windows"); }
+        { Window restored; require(restored.findChild<QAction*>("goLast")->shortcuts()==QList<QKeySequence>{QKeySequence("Alt+End"),QKeySequence("Alt+Shift+End")},"both custom shortcuts persist across windows"); }
         window.findChild<QAction*>("goFirst")->trigger(); QKeyEvent customLast(QEvent::KeyPress,Qt::Key_End,Qt::AltModifier); QApplication::sendEvent(view,&customLast);
         require(view->pdf.pageIndex()==1,"customized navigation shortcut works");
+        window.findChild<QAction*>("goFirst")->trigger();
+        QKeyEvent alternateLast(QEvent::KeyPress,Qt::Key_End,Qt::AltModifier|Qt::ShiftModifier); QApplication::sendEvent(view,&alternateLast);
+        require(view->pdf.pageIndex()==1,"second navigation shortcut works");
         QFile originalFile(second); require(originalFile.open(QIODevice::ReadOnly),"read original before recovery"); auto originalBytes=originalFile.readAll(); originalFile.close();
         window.findChild<QComboBox*>("viewMode")->setCurrentIndex(1); window.findChild<QSpinBox*>("zoomPercent")->setValue(150);
         view->beginText({100,600}); window.findChild<QTextEdit*>("inlineTextInput")->setPlainText("Borrador en progreso");
@@ -1505,19 +1518,22 @@ int main(int argc,char** argv) {
         });
         window.findChild<QAction*>("printPreviewAction")->trigger();
         require(printReentryBlocked,"printing cannot open a second dialog while preview is active");
-        for(const auto& name:{"propertiesAction","configureShortcutsAction","goPage","saveAsFileAction","exportAnnotationsAction","printPreviewAction"}) {
+        for(const auto& name:{"propertiesAction","configureShortcutsAction","goPage","printPreviewAction"}) {
             bool themed=false;
             QTimer::singleShot(0,[&]{ if(auto dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget())) { themed=dialog->palette().color(QPalette::Window).lightness()<100; if(!output.isEmpty()) dialog->grab().save(output+"/dark-"+QString(name)+".png"); dialog->reject(); } });
             window.findChild<QAction*>(name)->trigger(); require(themed,"application dialog follows night theme");
         }
         // Native Print dialog dismissal test temporarily omitted at the user's request.
-        {
-            bool themed=false;
-            QTimer::singleShot(0,[&]{ if(auto dialog=qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
-                themed=dialog->testOption(QFileDialog::DontUseNativeDialog) && dialog->palette().color(QPalette::Window).lightness()<100;
-                dialog->reject();
-            } });
-            window.findChild<QAction*>("openFileAction")->trigger(); require(themed,"Open dialog follows application night theme");
+        if(QApplication::platformName()=="offscreen") {
+            for(const auto& name:{"openFileAction","saveAsFileAction","exportAnnotationsAction"}) {
+                bool nativeAllowed=false;
+                QTimer::singleShot(0,[&]{ if(auto dialog=qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
+                    nativeAllowed=!dialog->testOption(QFileDialog::DontUseNativeDialog);
+                    dialog->reject();
+                } });
+                window.findChild<QAction*>(name)->trigger();
+                require(nativeAllowed,"file dialog allows the native picker");
+            }
         }
         auto navTabs=window.findChild<QTabWidget*>("navigationPanel"); int previousNavigation=navTabs->currentIndex(); navTabs->setCurrentIndex(2);
         if(!output.isEmpty()) iconToolbar->grab().save(output+"/tool-icons-dark.png");
@@ -1728,6 +1744,14 @@ int main(int argc,char** argv) {
             if(timer->interval()==15000) timer->stop();
         QSettings sessionSettings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication);
         QString sessionRoot=QFileInfo(sessionSettings.fileName()).absolutePath()+"/recovery";
+        {
+            QTemporaryDir recovery;
+            const auto obsolete=recovery.filePath(QUuid::createUuid().toString(QUuid::WithoutBraces)+".pdf");
+            const auto personal=recovery.filePath("lectura.pdf");
+            require(QFile::copy(fixture,obsolete) && QFile::copy(fixture,personal),"recovery cleanup fixture");
+            require(SessionStore::write(QDir(recovery.path()),{}) && QFile::exists(personal) && !QFile::exists(obsolete),
+                "session cleanup removes obsolete backups and preserves unrelated PDFs");
+        }
         auto sessionEntry=[](QString path) { return QJsonObject{{"path",path},{"id",QUuid::createUuid().toString(QUuid::WithoutBraces)}}; };
         auto writeManifest=[&](QJsonArray entries,int active,QString activeId=QString(),bool clean=false) {
             QDir().mkpath(sessionRoot); QFile file(sessionRoot+"/session.json"); require(file.open(QIODevice::WriteOnly),"write recovery regression manifest");
@@ -1935,7 +1959,7 @@ int main(int argc,char** argv) {
             QMouseEvent continuousRelease(QEvent::MouseButtonRelease,end,canvas->mapToGlobal(end.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier); QApplication::sendEvent(canvas,&continuousRelease);
             require(canvas->pdf.pageIndex()==2 && canvas->pdf.annotationContents(0)=="Mover comentario","continuous drag survives active page change while scrolling");
             require(canvas->pdf.undo() && canvas->pdf.setPage(0),"undo continuous drag");
-            auto find=reader.findChild<QAction*>("focusSearch"); require(find->shortcut()==QKeySequence("Ctrl+B") && find->property("defaultShortcut").toString()=="Ctrl+B","Spanish search shortcut and restored default");
+            auto find=reader.findChild<QAction*>("focusSearch"); require(find->shortcut()==QKeySequence("Ctrl+B") && find->property("defaultShortcuts").toString()=="Ctrl+B","Spanish search shortcut and restored default");
             auto search=reader.findChild<QAction*>("searchAction"); search->setChecked(false); canvas->setFocus();
             QKeyEvent searchKey(QEvent::KeyPress,Qt::Key_B,Qt::ControlModifier); QApplication::sendEvent(canvas,&searchKey); require(search->isChecked(),"Ctrl+B opens search panel");
             reader.openDocument(directory.path()+"/ui.pdf"); app.processEvents(); auto tabs=reader.findChild<QTabBar*>("documentTabs"); require(tabs->count()==2,"middle close fixture has two documents");
@@ -1988,11 +2012,31 @@ int main(int argc,char** argv) {
             auto list=reader.findChild<QListWidget*>("annotationList"); require(list->count()==1 && list->item(0)->data(Qt::UserRole+2).toString().startsWith("<b>Página 1 · Subrayado</b>"),"annotation page and type are bold");
             list->setCurrentRow(0); bool formatted=false; QTimer formatDialog;
             QObject::connect(&formatDialog,&QTimer::timeout,[&]{ if(auto dialog=reader.findChild<QDialog*>("underlineFormatDialog")) { dialog->findChild<QDoubleSpinBox*>("underlineFormatWidth")->setValue(5); formatted=true; dialog->accept(); } }); formatDialog.start(0);
-            for(auto button:reader.findChildren<QPushButton*>()) if(button->text()=="Editar") { button->click(); break; } formatDialog.stop();
+            QTimer::singleShot(0,[&]{
+                auto menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                require(menu && menu->actions().size()==3 && menu->actions().first()->text()=="Editar"
+                    && menu->actions()[1]->text()=="Color" && menu->actions()[2]->text()=="Borrar","annotation editing actions are available on right click");
+                menu->close(); menu->actions().first()->trigger();
+            });
+            const auto point=list->visualItemRect(list->item(0)).center();
+            QContextMenuEvent contextEvent(QContextMenuEvent::Mouse,point,list->viewport()->mapToGlobal(point));
+            QApplication::sendEvent(list->viewport(),&contextEvent);
+            formatDialog.stop();
             require(formatted && canvas->pdf.copyAnnotation(0).strokeWidth==5 && canvas->pdf.annotationContents(0).isEmpty(),"Edit modifies underline format without creating a comment body");
             if(!output.isEmpty()) { canvas->workers.waitForDone(); app.processEvents(); reader.grab().save(output+"/underline-and-annotations.png"); }
             canvas->first=8; canvas->last=14; highlight->trigger();
             require(canvas->pdf.ink({{10,10},{40,40}}),"ink panel fixture");
+            canvas->tool=PageView::Select;
+            const auto start=canvas->devicePoint({25,25}),end=canvas->devicePoint({95,125});
+            QMouseEvent press(QEvent::MouseButtonPress,start,canvas->mapToGlobal(start.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+            QApplication::sendEvent(canvas,&press);
+            QMouseEvent move(QEvent::MouseMove,end,canvas->mapToGlobal(end.toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+            QApplication::sendEvent(canvas,&move);
+            require(canvas->annotationDragging(),"selection grabs ink");
+            QMouseEvent release(QEvent::MouseButtonRelease,end,canvas->mapToGlobal(end.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+            QApplication::sendEvent(canvas,&release);
+            require(canvas->pdf.annotationCount()==3 && canvas->pdf.drawingAt({25,25})==-1 && canvas->pdf.drawingAt({95,125})==2,"drag translates the same ink geometry");
+            require(canvas->pdf.undo() && canvas->pdf.drawingAt({25,25})==2 && canvas->pdf.redo() && canvas->pdf.drawingAt({95,125})==2,"ink movement supports undo and redo");
             reader.findChild<QComboBox*>("annotationTypeFilter")->setCurrentIndex(1);
             auto editEntry=reader.findChild<QAction*>("editSelectedAnnotationAction");
             for(int index:{1,2}) {

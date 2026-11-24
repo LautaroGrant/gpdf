@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2 — November 23, 2026
+
+- Highlight and underline improvements on chopped/broken lines markup.
+- Added secondary highlight color in text selection menu via mouse.
+- Added secondary shortcut assignments.
+- Minor bugs fixes.
+
 ## 0.4.1 — November 18, 2026
 
 - Workbench improvements on UI and bug fixes. Detection of virtual paths of pdfs so they can be drag and dropped from different applications outside file explorer/desktop.
@@ -29,16 +36,11 @@
 - Automatic OCR is limited to 15 pages document in order to save memory. Option and suggestion pop-ups to apply OCR for larger documents.
 - Overall better memory handling.
 - Fixed graphical glitch that flickered to dark mode while in day mode.
-- Fixed error from automatic Updater unable to connect to Github releases.
+- Fixed error from automatic Updater unable to connect to Github Releases.
 
 ## 0.3.0 — October 22, 2026
 
-- Implementation of automatic local Windows OCR for scanned PDF pages, using the OCR languages installed in Windows without bundling additional recognition models.
-
-### Notes
-
-- Windows PowerShell 5.1 and an installed Windows OCR language are required. Device policies can prevent OCR from running.
-- OCR character positions within a word are approximate. Saving a PDF does not embed a searchable OCR text layer; results are retained locally by GPDF.
+- Implementation of automatic local Windows OCR for scanned PDF pages, using the OCR languages installed in Windows without bundling additional recognition models. Windows PowerShell 5.1 and an installed Windows OCR language are required. Device policies can prevent OCR from running.
 
 ## 0.2.8 — October 17, 2026
 

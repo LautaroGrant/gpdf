@@ -182,9 +182,6 @@ public:
         if((widthChanged && (mode==Double || fit!=Manual)) || (heightChanged && fit!=Manual)) invalidateCache(-1,true);
         if(widthChanged || fit!=Manual || !pdf.loaded()) { rebuild(); update(); }
     }
-    void setViewportWidth(int width) {
-        setViewportSize(QSize(width,viewportHeight));
-    }
     void rebuild() {
         if(sizes.size()!=pdf.pageCount()) { sizes.clear(); for(int i=0;i<pdf.pageCount();++i) sizes.append(pdf.pageSize(i)); }
         pageRects.fill(QRectF(),pdf.pageCount());
@@ -425,7 +422,23 @@ protected:
             showComment(hit); update(); return;
         }
         if(tool==Eraser) { eraseAt(event->position()); return; }
-        if(tool==Select) { searchPage=-1; searchRects.clear(); selectedAnnotation=hit; if(annotationSelected) annotationSelected(hit); first=last=hit>=0 ? -1 : pdf.characterAt(p); dragStart=event->position(); dragOffset={}; draggingText=false; dragCandidate=hit>=0 && (pdf.annotationType(hit)==FPDF_ANNOT_FREETEXT || pdf.annotationType(hit)==FPDF_ANNOT_TEXT) && pdf.canEditAnnotation(hit); if(dragCandidate) { dragPage=pdf.pageIndex(); dragIndex=hit; dragRevision=pdf.revision(); dragIsComment=pdf.annotationType(hit)==FPDF_ANNOT_TEXT; auto rect=pdf.annotationRect(hit); dragAnchor=p-QPointF(rect.left(),rect.bottom()); dragOutline=deviceRect(rect); } showComment(hit); update(); }
+        if(tool==Select) {
+            searchPage=-1; searchRects.clear(); selectedAnnotation=hit;
+            if(annotationSelected) annotationSelected(hit);
+            first=last=hit>=0 ? -1 : pdf.characterAt(p);
+            dragStart=event->position(); dragOffset={}; draggingText=false;
+            const auto type=pdf.annotationType(hit);
+            dragCandidate=(type==FPDF_ANNOT_FREETEXT || type==FPDF_ANNOT_TEXT || type==FPDF_ANNOT_INK)
+                && pdf.canEditAnnotation(hit);
+            if(dragCandidate) {
+                if(type==FPDF_ANNOT_INK) pressedLink={};
+                dragPage=pdf.pageIndex(); dragIndex=hit; dragRevision=pdf.revision();
+                dragIsComment=type==FPDF_ANNOT_TEXT;
+                auto rect=pdf.annotationRect(hit);
+                dragAnchor=p-QPointF(rect.left(),rect.bottom()); dragOutline=deviceRect(rect);
+            }
+            showComment(hit); update();
+        }
         else if(tool==Pen) { stroke={p}; update(); }
         else if(tool==Text) {
             beginText(p,hit);
@@ -495,12 +508,16 @@ protected:
                 if(moved<0) { if(report) report(pdf.error()); }
                 else { selectedAnnotation=moved; draggingText=dragCandidate=false; invalidateCache(); if(annotationMoved) annotationMoved(moved); }
             }
-        } else if(draggingText && selectedAnnotation>=0 && pdf.revision()==dragRevision) {
-            int index=selectedAnnotation; auto rect=pdf.annotationRect(index);
-            QPointF delta=pdfPoint(dragStart+dragOffset)-pdfPoint(dragStart);
-            QPointF target(rect.left()+delta.x(),rect.bottom()+delta.y());
-            if(!pdf.moveTextAnnotation(index,target)) report(pdf.error());
-            else if(annotationMoved) annotationMoved(index);
+        } else if(draggingText && pdf.pageIndex()==dragPage && pdf.revision()==dragRevision) {
+            const auto delta=pdfPoint(event->position())-pdfPoint(dragStart);
+            bool moved;
+            if(pdf.annotationType(dragIndex)==FPDF_ANNOT_INK) moved=pdf.moveInkAnnotation(dragIndex,delta);
+            else {
+                const auto rect=pdf.annotationRect(dragIndex);
+                moved=pdf.moveTextAnnotation(dragIndex,QPointF(rect.left(),rect.bottom())+delta);
+            }
+            if(!moved) { if(report) report(pdf.error()); }
+            else if(annotationMoved) annotationMoved(dragIndex);
         }
         draggingText=dragCandidate=false; dragOffset={};
         dragScroll->stop(); dragEdgeTicks=0;

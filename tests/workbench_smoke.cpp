@@ -178,7 +178,8 @@ int main(int argc,char** argv) {
   require(tools->count()==6 && tools->item(0)->text()==(english ? "Merge PDFs" : "Unir PDFs"),"six translated tools");
   auto dest=workbench.findChild<QLineEdit*>("workbenchDestination");auto range=workbench.findChild<QLineEdit*>("workbenchRange");auto run=workbench.findChild<QPushButton*>("workbenchRun");
   auto pump=[&](int ms){QElapsedTimer t;t.start();while(t.elapsed()<ms){app.processEvents();QThread::msleep(1);}};
-  pump(500);
+  QElapsedTimer previewWait; previewWait.start();
+  while(previewWait.elapsed()<5000 && (pages->count()!=2 || pages->item(0)->icon().isNull() || pages->item(1)->icon().isNull())) pump(10);
   require(!pages->isHidden() && pages->count()==2 && !pages->item(0)->icon().isNull() && !pages->item(1)->icon().isNull(),"merge displays one rendered preview per input file");
   require(pages->item(0)->text()==QFileInfo(first).fileName() && pages->item(1)->text()==QFileInfo(second).fileName(),"merge previews follow input order");
   require(QDir::fromNativeSeparators(dest->text())==QStandardPaths::writableLocation(QStandardPaths::DesktopLocation),"default output folder is Desktop");

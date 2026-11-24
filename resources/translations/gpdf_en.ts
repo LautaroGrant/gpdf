@@ -2,7 +2,7 @@
 <TS version="2.1" language="en_US" sourcelanguage="es">
   <context>
     <name>GPDF</name>
-    <message><source>Unificar resaltado</source><translation>Unify highlight</translation></message>
+    <message><source>No se pudo mover el trazo.</source><translation>Could not move the stroke.</translation></message>
     <message><source>No se pudo unificar el resaltado.</source><translation>Could not unify the highlight.</translation></message>
     <message>
       <source>Modo profesional</source>
@@ -357,10 +357,6 @@
       <translation>Drag to resize the box</translation>
     </message>
     <message>
-      <source>Seleccionar una anotación para editarla, cambiar su color o borrarla. Doble clic para editar el comentario.</source>
-      <translation>Select an annotation to edit it, change its color or delete it. Double-click to edit the comment.</translation>
-    </message>
-    <message>
       <source>Filtro:</source>
       <translation>Filter:</translation>
     </message>
@@ -445,10 +441,6 @@
       <translation>Search</translation>
     </message>
     <message>
-      <source>Ingresar texto para buscar.</source>
-      <translation>Enter text to search.</translation>
-    </message>
-    <message>
       <source>Documentos</source>
       <translation>Documents</translation>
     </message>
@@ -473,14 +465,6 @@
       <translation>Document view</translation>
     </message>
     <message>
-      <source>Página actual: escribir un número y presionar Enter para ir a esa página.</source>
-      <translation>Current page: enter a number and press Enter to go to that page.</translation>
-    </message>
-    <message>
-      <source>Zoom del documento (50%–300%). En dos páginas se ajusta al ancho disponible.</source>
-      <translation>Document zoom (50%–300%). Two-page view fits the available width.</translation>
-    </message>
-    <message>
       <source>Búsqueda</source>
       <translation>Search</translation>
     </message>
@@ -491,14 +475,6 @@
     <message>
       <source>Seleccionar</source>
       <translation>Select</translation>
-    </message>
-    <message>
-      <source>Arrastrar sobre el texto y luego presionar Resaltar.</source>
-      <translation>Drag over text, then press Highlight.</translation>
-    </message>
-    <message>
-      <source>Hacer clic en la página o arrastrar para dibujar.</source>
-      <translation>Click on the page or drag to draw.</translation>
     </message>
     <message>
       <source>Borrador de resaltados, subrayados y trazos</source>
@@ -517,20 +493,12 @@
       <translation>Show or hide annotations</translation>
     </message>
     <message>
-      <source>Abrir un documento desde Archivo.</source>
-      <translation>Open a document from File.</translation>
-    </message>
-    <message>
       <source>La exportación no puede reemplazar un documento abierto.</source>
       <translation>Export cannot replace an open document.</translation>
     </message>
     <message>
       <source>Elegir una extensión .md, .txt o .html para exportar.</source>
       <translation>Choose a .md, .txt or .html extension to export.</translation>
-    </message>
-    <message>
-      <source>Anotaciones exportadas: </source>
-      <translation>Annotations exported: </translation>
     </message>
     <message>
       <source>No se pudo crear la copia de recuperación.</source>
@@ -629,10 +597,6 @@ Created by Lautaro Grant</translation>
     <message>
       <source>Vista previa de impresión</source>
       <translation>Print preview</translation>
-    </message>
-    <message>
-      <source>Hacer clic en el área vacía para abrir un PDF.</source>
-      <translation>Click the empty area to open a PDF.</translation>
     </message>
     <message>
       <source>Deshacer</source>
@@ -775,7 +739,7 @@ Created by Lautaro Grant</translation>
       <translation>Full screen</translation>
     </message>
     <message>
-      <source>Resaltar con color secundario</source>
+      <source>Resaltar secundario</source>
       <translation>Highlight with secondary color</translation>
     </message>
     <message>
@@ -883,10 +847,6 @@ Created by Lautaro Grant</translation>
       <translation>&amp;Shortcuts</translation>
     </message>
     <message>
-      <source>Ver y modificar atajos…</source>
-      <translation>View and edit shortcuts…</translation>
-    </message>
-    <message>
       <source>Atajos de teclado</source>
       <translation>Keyboard shortcuts</translation>
     </message>
@@ -895,20 +855,12 @@ Created by Lautaro Grant</translation>
       <translation>Action</translation>
     </message>
     <message>
-      <source>Atajo</source>
-      <translation>Shortcut</translation>
+      <source>Atajo 1</source>
+      <translation>Shortcut 1</translation>
     </message>
     <message>
-      <source>Confirmar/cancelar texto funciona durante la edición. Buscar/resultado siguiente funciona en el campo y la lista de resultados de Búsqueda. Los cambios se guardan para las próximas aperturas.</source>
-      <translation>Confirm/cancel text works while editing. Search/next result works in the Search field and results list. Changes are saved for future launches.</translation>
-    </message>
-    <message>
-      <source>Atajo inválido</source>
-      <translation>Invalid shortcut</translation>
-    </message>
-    <message>
-      <source>Usar una sola combinación de teclas por función.</source>
-      <translation>Use a single key combination per action.</translation>
+      <source>Atajo 2</source>
+      <translation>Shortcut 2</translation>
     </message>
     <message>
       <source>Atajo repetido</source>
@@ -917,6 +869,10 @@ Created by Lautaro Grant</translation>
     <message>
       <source>%1 ya está asignado a %2.</source>
       <translation>%1 is already assigned to %2.</translation>
+    </message>
+    <message>
+      <source>¿Querés reasignarlo a «%1»?</source>
+      <translation>Reassign it to “%1”?</translation>
     </message>
     <message>
       <source>&amp;Editar</source>
@@ -951,20 +907,12 @@ Created by Lautaro Grant</translation>
       <translation>Save changes before continuing?</translation>
     </message>
     <message>
-      <source>Abierto: </source>
-      <translation>Opened: </translation>
-    </message>
-    <message>
       <source>Abrir PDF</source>
       <translation>Open PDF</translation>
     </message>
     <message>
       <source>Contraseña (si corresponde):</source>
       <translation>Password (if required):</translation>
-    </message>
-    <message>
-      <source>Guardado: </source>
-      <translation>Saved: </translation>
     </message>
     <message>
       <source>Editar subrayado</source>
@@ -987,20 +935,8 @@ Created by Lautaro Grant</translation>
       <translation>Edit comment</translation>
     </message>
     <message>
-      <source>Anotación editada. Guardar para conservar el cambio.</source>
-      <translation>Annotation edited. Save to keep the change.</translation>
-    </message>
-    <message>
       <source>Color de la anotación</source>
       <translation>Annotation color</translation>
-    </message>
-    <message>
-      <source>Color actualizado.</source>
-      <translation>Color updated.</translation>
-    </message>
-    <message>
-      <source>Anotación borrada. Guardar para conservar el cambio.</source>
-      <translation>Annotation deleted. Save to keep the change.</translation>
     </message>
     <message>
       <source>Sin título</source>

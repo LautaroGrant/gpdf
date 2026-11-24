@@ -310,6 +310,49 @@ bool PdfDocument::moveTextAnnotation(int index,QPointF topLeft) { std::lock_guar
     FPDFPage_CloseAnnot(annot);
     if(ok) { dirty_=true; recordHistory(); } return ok;
 }
+bool PdfDocument::moveInkAnnotation(int index,QPointF delta) {
+    std::lock_guard apiGuard(pdfiumMutex);
+    if(annotationType(index)!=FPDF_ANNOT_INK || !canEditAnnotation(index))
+        return fail(gpdfTr("No se pudo mover el trazo."));
+    const auto copy=copyAnnotation(index);
+    if(copy.strokes.isEmpty()) return fail(gpdfTr("No se pudo mover el trazo."));
+
+    const auto pageBounds=QRectF(normalizedToPage(index_,{0,0}),normalizedToPage(index_,{1,1})).normalized();
+    // An existing stroke may already extend beyond the crop box.
+    delta.setX(std::clamp(delta.x(),std::min(0.0,pageBounds.left()-copy.rect.left()),
+                         std::max(0.0,pageBounds.right()-copy.rect.right())));
+    delta.setY(std::clamp(delta.y(),std::min(0.0,pageBounds.top()-copy.rect.top()),
+                         std::max(0.0,pageBounds.bottom()-copy.rect.bottom())));
+    if(delta.isNull()) return true;
+
+    auto annot=FPDFPage_GetAnnot(page_,index);
+    FS_RECTF previous{};
+    if(!FPDFAnnot_GetRect(annot,&previous)) {
+        if(annot) FPDFPage_CloseAnnot(annot);
+        return fail(gpdfTr("No se pudo mover el trazo."));
+    }
+    const auto moved=copy.rect.translated(delta);
+    const FS_RECTF target{float(moved.left()),float(moved.bottom()),float(moved.right()),float(moved.top())};
+    auto replaceStrokes=[&](QPointF offset) {
+        if(!FPDFAnnot_RemoveInkList(annot)) return false;
+        for(auto stroke:copy.strokes) {
+            for(auto& point:stroke) { point.x+=float(offset.x()); point.y+=float(offset.y()); }
+            if(FPDFAnnot_AddInkStroke(annot,stroke.constData(),stroke.size())<0) return false;
+        }
+        return true;
+    };
+    bool ok=replaceStrokes(delta) && FPDFAnnot_SetRect(annot,&target)
+        && FPDFAnnot_SetAP(annot,FPDF_ANNOT_APPEARANCEMODE_NORMAL,nullptr);
+    if(!ok) {
+        replaceStrokes({});
+        FPDFAnnot_SetRect(annot,&previous);
+    }
+    FPDFPage_CloseAnnot(annot);
+    if(!ok) return fail(gpdfTr("No se pudo mover el trazo."));
+    dirty_=true;
+    recordHistory();
+    return true;
+}
 PdfDocument::AnnotationCopy PdfDocument::copyAnnotation(int index) const { std::lock_guard apiGuard(pdfiumMutex);
     AnnotationCopy copy;
     if(!canEditAnnotation(index)) return copy;
@@ -1242,6 +1285,8 @@ QVector<PdfDocument::AnnotationEntry> PdfDocument::pageAnnotations(int index) co
     if(auto cached=annotationPages_.constFind(index); cached!=annotationPages_.cend()) return cached.value();
     QVector<AnnotationEntry> entries;
         auto page=FPDF_LoadPage(doc_,index); if(!page) return entries;
+        QVector<float> verticalPositions;
+        const int rotation=FPDFPage_GetRotation(page);
         FPDF_TEXTPAGE pageText=nullptr;
         QVector<QRectF> lines;
         for(int i=0;i<FPDFPage_GetAnnotCount(page);++i) {
@@ -1258,11 +1303,26 @@ QVector<PdfDocument::AnnotationEntry> PdfDocument::pageAnnotations(int index) co
                 }
                 if(pageText) contents=markupExcerpt(pageText,annotation,lines);
             }
+            FS_RECTF rect{};
+            float position=0;
+            if(FPDFAnnot_GetRect(annotation,&rect)) {
+                switch(rotation) {
+                    case 1: position=std::min(rect.left,rect.right); break;
+                    case 2: position=std::min(rect.bottom,rect.top); break;
+                    case 3: position=-std::max(rect.left,rect.right); break;
+                    default: position=-std::max(rect.bottom,rect.top); break;
+                }
+            }
+            verticalPositions.resize(i+1);
+            verticalPositions[i]=std::isfinite(position) ? position : 0;
             entries.append({index,i,type,contents});
             FPDFPage_CloseAnnot(annotation);
         }
         if(pageText) FPDFText_ClosePage(pageText);
         FPDF_ClosePage(page);
+    std::stable_sort(entries.begin(),entries.end(),[&](const AnnotationEntry& a,const AnnotationEntry& b) {
+        return verticalPositions[a.index]<verticalPositions[b.index];
+    });
     annotationPages_.insert(index,entries); return entries;
 }
 

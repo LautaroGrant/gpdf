@@ -228,6 +228,17 @@ int main(int argc, char** argv) {
         auto styledEdited=pdf.render(1.0);
         require(pdf.removeAnnotation(0) && pdf.freeText({60,620},"Formato editado",{"Segoe UI",26,QColor("#cc2244")}),"recreate equivalent styled text");
         require(pdf.render(1.0)==styledEdited,"editing retains original font size and color");
+        {
+            PdfDocument ordered;
+            require(ordered.createSample(2) && ordered.note({60,300},"Abajo")
+                && ordered.note({60,650},"Arriba") && ordered.setPage(1)
+                && ordered.note({60,700},"Segunda página"),"annotation order fixture");
+            const auto entries=ordered.documentAnnotations();
+            require(entries.size()==3 && entries[0].page==0 && entries[0].index==1
+                && entries[1].page==0 && entries[1].index==0
+                && entries[2].page==1 && entries[2].index==0,
+                "annotations are ordered by page and vertical position while retaining their indices");
+        }
         require(pdf.createSample(2),"history and document annotation fixture");
         require(pdf.freeText({60,620},"Movible",{"Segoe UI",20,Qt::red}),"movable text fixture");
         require(pdf.saveCopy(directory+"/movable.pdf") && pdf.open(directory+"/movable.pdf"),"reopen movable text fixture");

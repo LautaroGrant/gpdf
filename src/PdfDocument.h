@@ -37,6 +37,7 @@ public:
     QPair<int,int> wordRange(int index) const;
     QPair<int,int> lineRange(int index) const;
     bool moveTextAnnotation(int index,QPointF topLeft);
+    bool moveInkAnnotation(int index,QPointF delta);
     int moveCommentAnnotation(int sourcePage,int index,int destinationPage,QPointF topLeft);
     bool canUndo() const { return historyPosition_>0; }
     bool canRedo() const { return historyPosition_+1<history_.size(); }

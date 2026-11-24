@@ -16,6 +16,8 @@
 
 class Window : public QMainWindow {
     friend struct WindowTransferTest;
+    static constexpr double minZoom = 0.10;
+    static constexpr double maxZoom = 5.0;
 public:
     explicit Window(QString recoveryDirectory={}):recoveryDirectoryOverride(std::move(recoveryDirectory)) {
         installUiTranslations();
@@ -29,6 +31,7 @@ public:
             view->setFocus();
             QMenu menu(this); menu.setObjectName("selectionContextMenu");
             menu.addAction(findChild<QAction*>("highlightAction"));
+            menu.addAction(findChild<QAction*>("secondaryHighlightAction"));
             menu.addAction(findChild<QAction*>("underlineAction"));
             menu.addSeparator();
             menu.addAction(findChild<QAction*>("copyAction"));
@@ -65,24 +68,7 @@ public:
         connect(exportButton,&QPushButton::clicked,this,[this]{ if(auto action=findChild<QAction*>("exportAnnotationsAction")) action->trigger(); });
         connect(annotationSearch,&QLineEdit::textChanged,this,[this]{ refreshPanel(); });
         panelLayout->addWidget(annotations);
-        auto buttons=new QHBoxLayout;
-        editButton=new QPushButton(gpdfTr("Editar"));
-        colorButton=new QPushButton(gpdfTr("Color"));
-        deleteButton=new QPushButton(gpdfTr("Borrar"));
-        buttons->addWidget(editButton); buttons->addWidget(colorButton); buttons->addWidget(deleteButton);
-        panelLayout->addLayout(buttons);
-        unifyButton=new QPushButton(gpdfTr("Unificar resaltado"));
-        unifyButton->setEnabled(false);
-        panelLayout->addWidget(unifyButton);
-        connect(unifyButton,&QPushButton::clicked,this,[this]{
-            int row=selectedAnnotationIndex();
-            if(!pdf.unifyHighlight(row)) error(pdf.error());
-            else refresh(row);
-        });
         panelLayout->addWidget(exportButton);
-        connect(editButton,&QPushButton::clicked,[this]{ editSelected(); });
-        connect(colorButton,&QPushButton::clicked,[this]{ colorSelected(); });
-        connect(deleteButton,&QPushButton::clicked,[this]{ deleteSelected(); });
         auto splitter = new QSplitter;
         // Paint container surfaces with the current palette instead of exposing
         // a native window background left over from the previous theme.
@@ -113,15 +99,18 @@ public:
         searchInput=new QLineEdit; searchInput->setObjectName("searchInput"); searchInput->setPlaceholderText(gpdfTr("Texto a buscar…")); searchInput->setClearButtonEnabled(true);
         searchLayout->addWidget(searchInput);
         auto searchButton=new QPushButton(gpdfTr("Buscar")); searchButton->setObjectName("searchButton"); searchLayout->addWidget(searchButton);
-        searchStatus=new QLabel(gpdfTr("Ingresar texto para buscar.")); searchStatus->setObjectName("searchStatus"); searchStatus->setWordWrap(true); searchLayout->addWidget(searchStatus);
+        searchStatus=new QLabel; searchStatus->setObjectName("searchStatus"); searchStatus->setWordWrap(true); searchLayout->addWidget(searchStatus);
         searchResults=new QListWidget; searchResults->setObjectName("searchResults"); searchResults->setProperty("suppressHoverHelp",true); searchResults->setWordWrap(true); searchResults->setLayoutMode(QListView::Batched); searchResults->setBatchSize(64); searchResults->setItemDelegate(new SearchResultDelegate(searchResults)); searchLayout->addWidget(searchResults);
         searchTask=new QTimer(this); searchTask->setObjectName("searchTask"); searchTask->setSingleShot(true); searchTask->setInterval(0);
         searchDebounce=new QTimer(this); searchDebounce->setObjectName("searchDebounce"); searchDebounce->setSingleShot(true); searchDebounce->setInterval(600);
         connect(searchTask,&QTimer::timeout,[this]{ searchNextPage(); });
         connect(searchDebounce,&QTimer::timeout,[this]{ startSearch(); });
         connect(searchButton,&QPushButton::clicked,[this]{ startSearch(); });
-        connect(searchInput,&QLineEdit::returnPressed,[this]{ auto action=findChild<QAction*>("searchEnterAction"); if(action && action->shortcut()==QKeySequence(Qt::Key_Return)) searchEnter(); });
-        connect(searchInput,&QLineEdit::textChanged,[this]{ ++searchGeneration; searchBusy=false; searchTask->stop(); pendingSearchNext=false; lastSearchRow=-1; searchDebounce->start(); });
+        connect(searchInput,&QLineEdit::returnPressed,[this]{ auto action=findChild<QAction*>("searchEnterAction"); if(action && action->shortcuts().contains(QKeySequence(Qt::Key_Return))) searchEnter(); });
+        connect(searchInput,&QLineEdit::textChanged,[this](const QString& text){
+            if(text.trimmed().isEmpty()) { startSearch(); return; }
+            ++searchGeneration; searchBusy=false; searchTask->stop(); pendingSearchNext=false; lastSearchRow=-1; searchDebounce->start();
+        });
         connect(searchResults,&QListWidget::currentRowChanged,[this](int row){ showSearchResult(row); });
         connect(searchResults,&QListWidget::itemClicked,[this](QListWidgetItem* item){ showSearchResult(searchResults->row(item)); });
         splitter->addWidget(searchPanel); splitter->addWidget(scroll); splitter->addWidget(panel); splitter->setSizes({200,260,820,300});
@@ -256,6 +245,20 @@ public:
         connect(togglePanel,&QAction::toggled,this,[this,panel](bool visible){ panel->setVisible(visible); if(visible) refreshPanel(view->selectedAnnotation); });
         connect(annotations,&QListWidget::itemActivated,[this](QListWidgetItem*){ editSelected(); });
         connect(annotations,&QListWidget::currentRowChanged,[this](int row){ selectAnnotation(row); });
+        annotations->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(annotations,&QListWidget::customContextMenuRequested,this,[this](QPoint position){
+            auto item=annotations->itemAt(position);
+            if(!item) return;
+            const int page=item->data(Qt::UserRole).toInt();
+            const int index=item->data(Qt::UserRole+1).toInt();
+            annotations->setCurrentItem(item);
+            if(page!=pdf.pageIndex() || index!=selectedAnnotationIndex()) return;
+            QMenu menu(annotations);
+            menu.addAction(gpdfTr("Editar"),this,[this]{ editSelected(); })->setEnabled(hasAnnotationEditor(index));
+            menu.addAction(gpdfTr("Color"),this,[this]{ colorSelected(); })->setEnabled(pdf.canColorAnnotation(index));
+            menu.addAction(gpdfTr("Borrar"),this,[this]{ deleteSelected(); })->setEnabled(pdf.canEditAnnotation(index));
+            menu.exec(annotations->viewport()->mapToGlobal(position));
+        });
         auto removeAction=new QAction(annotations);
         removeAction->setShortcut(QKeySequence()); removeAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         annotations->addAction(removeAction);
@@ -467,7 +470,7 @@ public:
             if(int(documents.size())==oldSize) { preservePending(); continue; }
             auto& doc=*documents.back(); doc.id=item["id"].toString(doc.id); if(QUuid(doc.id).isNull()) doc.id=QUuid::createUuid().toString(QUuid::WithoutBraces);
             source=path; doc.path=path; doc.personalMarks=item["marks"].toArray(); if(doc.personalMarks.isEmpty()) { QSettings reading(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); doc.personalMarks=QJsonDocument::fromJson(reading.value(readingKey(path)).toByteArray()).object()["marks"].toArray(); } if(useBackup) pdf.markRecovered();
-            doc.mode=PageView::Mode(std::clamp(item["mode"].toInt(),0,2)); doc.fit=PageView::Fit(std::clamp(item["fit"].toInt(),0,3)); doc.scale=std::clamp(item["scale"].toDouble(1.25),0.5,3.0); doc.rotation=std::clamp(item["rotation"].toInt(),0,3); doc.vertical=std::max(0,item["vertical"].toInt()); doc.horizontal=std::max(0,item["horizontal"].toInt()); doc.scope=std::clamp(item["scope"].toInt(),0,1); doc.type=std::clamp(item["type"].toInt(),0,annotationTypeFilter->count()-1); doc.query=item["query"].toString(); doc.searchVisible=item["searchVisible"].toBool(); doc.annotationsVisible=item["annotationsVisible"].toBool();
+            doc.mode=PageView::Mode(std::clamp(item["mode"].toInt(),0,2)); doc.fit=PageView::Fit(std::clamp(item["fit"].toInt(),0,3)); doc.scale=std::clamp(item["scale"].toDouble(1.25),minZoom,maxZoom); doc.rotation=std::clamp(item["rotation"].toInt(),0,3); doc.vertical=std::max(0,item["vertical"].toInt()); doc.horizontal=std::max(0,item["horizontal"].toInt()); doc.scope=std::clamp(item["scope"].toInt(),0,1); doc.type=std::clamp(item["type"].toInt(),0,annotationTypeFilter->count()-1); doc.query=item["query"].toString(); doc.searchVisible=item["searchVisible"].toBool(); doc.annotationsVisible=item["annotationsVisible"].toBool();
             pdf.setPage(std::clamp(item["page"].toInt(),0,std::max(0,pdf.pageCount()-1)));
             view->mode=doc.mode; view->fit=doc.fit; view->scale=doc.scale; view->rotation=doc.rotation;
             { QSignalBlocker a(viewMode),b(annotationScope),c(annotationTypeFilter); viewMode->setCurrentIndex(int(doc.mode)); annotationScope->setCurrentIndex(doc.scope); annotationTypeFilter->setCurrentIndex(doc.type); } refresh();
@@ -667,7 +670,7 @@ protected:
                     int delta=wheel->angleDelta().y();
                     if((delta>0 && zoomWheelRemainder<0) || (delta<0 && zoomWheelRemainder>0)) zoomWheelRemainder=0;
                     zoomWheelRemainder+=delta; int steps=zoomWheelRemainder/120; zoomWheelRemainder%=120;
-                    if(steps) { int percent=int(std::lround((view->fit==PageView::Manual ? view->scale : view->effectiveScale)*100)); setZoom(std::clamp((percent+steps*25)/100.0,0.5,3.0),scroll->viewport()->mapFromGlobal(wheel->globalPosition().toPoint())); }
+                    if(steps) { int percent=int(std::lround((view->fit==PageView::Manual ? view->scale : view->effectiveScale)*100)); setZoom((percent+steps*25)/100.0,scroll->viewport()->mapFromGlobal(wheel->globalPosition().toPoint())); }
                 }
                 wheel->accept(); return true;
             }
@@ -703,19 +706,16 @@ protected:
                 // Ignored keys can bubble from an editor to its parent widget.
                 auto focused=QApplication::focusWidget();
                 const bool editing=isTextControl(widget) || (focused && focused->window()==this && isTextControl(focused));
-                if(!editing && pdf.loaded() && key->modifiers()==Qt::ControlModifier
-                   && (widget==view || widget==scroll || widget==scroll->viewport())
-                   && (key->key()==Qt::Key_Left || key->key()==Qt::Key_Right || key->key()==Qt::Key_Up || key->key()==Qt::Key_Down)) {
-                    key->accept();
-                    if(event->type()==QEvent::KeyPress) {
-                        const bool horizontal=key->key()==Qt::Key_Left || key->key()==Qt::Key_Right;
-                        auto bar=horizontal ? scroll->horizontalScrollBar() : scroll->verticalScrollBar();
-                        const int direction=key->key()==Qt::Key_Left || key->key()==Qt::Key_Up ? -1 : 1;
-                        bar->setValue(bar->value()+direction*qMax(bar->singleStep()*5,bar->pageStep()/3));
-                    }
-                    return true;
+                auto textEditor=[](QWidget* target) {
+                    return qobject_cast<QLineEdit*>(target) || qobject_cast<QTextEdit*>(target) || qobject_cast<QPlainTextEdit*>(target);
+                };
+                if(key->matches(QKeySequence::Paste) && (textEditor(widget) || (focused && focused->window()==this && textEditor(focused)))) {
+                    if(event->type()==QEvent::ShortcutOverride) { key->accept(); return true; }
+                    return false;
                 }
-                QKeySequence pressed=key->key()==Qt::Key_Backtab ? QKeySequence(Qt::CTRL|Qt::SHIFT|Qt::Key_Tab) : QKeySequence(key->keyCombination());
+                QKeySequence pressed=key->key()==Qt::Key_Backtab
+                    ? QKeySequence(QKeyCombination(key->modifiers()|Qt::ShiftModifier,Qt::Key_Tab))
+                    : QKeySequence(key->keyCombination());
                 const bool searchFocused=focused==searchInput || focused==searchResults || (focused && searchResults->isAncestorOf(focused));
                 // Contextual search keys must win before editor handling and user shortcuts.
                 const bool searchNavigation=searchFocused && !searchPanel->isHidden() &&
@@ -749,6 +749,18 @@ protected:
                         if(event->type()==QEvent::ShortcutOverride) key->accept(); else action->trigger();
                         return true;
                     }
+                }
+                if(!editing && pdf.loaded() && key->modifiers()==Qt::ControlModifier
+                   && (widget==view || widget==scroll || widget==scroll->viewport())
+                   && (key->key()==Qt::Key_Left || key->key()==Qt::Key_Right || key->key()==Qt::Key_Up || key->key()==Qt::Key_Down)) {
+                    key->accept();
+                    if(event->type()==QEvent::KeyPress) {
+                        const bool horizontal=key->key()==Qt::Key_Left || key->key()==Qt::Key_Right;
+                        auto bar=horizontal ? scroll->horizontalScrollBar() : scroll->verticalScrollBar();
+                        const int direction=key->key()==Qt::Key_Left || key->key()==Qt::Key_Up ? -1 : 1;
+                        bar->setValue(bar->value()+direction*qMax(bar->singleStep()*5,bar->pageStep()/3));
+                    }
+                    return true;
                 }
             }
         }
@@ -968,7 +980,7 @@ private:
         bool previous=updatingView; updatingView=true;
         documents[activeDocument]->personalMarks=state["marks"].toArray();
         pdf.setPage(std::clamp(state["page"].toInt(),0,std::max(0,pdf.pageCount()-1)));
-        view->mode=PageView::Mode(std::clamp(state["mode"].toInt(),0,2)); view->fit=PageView::Fit(std::clamp(state["fit"].toInt(),0,3)); view->scale=std::clamp(state["scale"].toDouble(1.25),0.5,3.0); view->rotation=std::clamp(state["rotation"].toInt(),0,3);
+        view->mode=PageView::Mode(std::clamp(state["mode"].toInt(),0,2)); view->fit=PageView::Fit(std::clamp(state["fit"].toInt(),0,3)); view->scale=std::clamp(state["scale"].toDouble(1.25),minZoom,maxZoom); view->rotation=std::clamp(state["rotation"].toInt(),0,3);
         { QSignalBlocker blocker(viewMode); viewMode->setCurrentIndex(int(view->mode)); } refresh();
         scroll->verticalScrollBar()->setValue(state["vertical"].toInt()); scroll->horizontalScrollBar()->setValue(state["horizontal"].toInt()); updatingView=previous;
     }
@@ -1501,16 +1513,17 @@ private:
         for(bool pencil:{true,false}) { auto button=qobject_cast<QToolButton*>(tools->widgetForAction(findChild<QAction*>(pencil ? "editTool3" : "highlightAction"))); button->setMenu(drawingMenu(pencil,button)); button->setPopupMode(QToolButton::MenuButtonPopup); }
         auto underlineButton=qobject_cast<QToolButton*>(tools->widgetForAction(findChild<QAction*>("underlineAction"))); underlineButton->setMenu(underlineMenu(underlineButton)); underlineButton->setPopupMode(QToolButton::MenuButtonPopup);
         auto primary=findChild<QAction*>("highlightAction"); primary->setShortcut(QKeySequence("Ctrl+S"));
-        auto secondaryAction=new QAction(gpdfTr("Resaltar con color secundario"),this); secondaryAction->setObjectName("secondaryHighlightAction"); secondaryAction->setShortcut(QKeySequence("Ctrl+Shift+S")); addAction(secondaryAction);
+        auto secondaryAction=new QAction(QIcon(new GpdfToolIcon(4,view->secondaryHighlightColor)),gpdfTr("Resaltar secundario"),this);
+        secondaryAction->setObjectName("secondaryHighlightAction"); secondaryAction->setShortcut(QKeySequence("Ctrl+Shift+S")); addAction(secondaryAction);
         connect(secondaryAction,&QAction::triggered,this,[this]{ std::lock_guard guard(PdfDocument::apiMutex()); if(!pdf.loaded() || view->first<0 || view->last<0) return; if(!pdf.highlight(view->first,view->last,view->secondaryHighlightColor)) error(pdf.error()); else { view->resetSelection(); refresh(); } });
         tools->setMinimumWidth(tools->sizeHint().width()+16);
         updateToolbarLayout();
-        action(fileMenu,fileActions,gpdfTr("Exportar anotaciones…"),"exportAnnotationsAction",[this]{ if(!view->finishText() || !pdf.loaded()) return; QString selectedFilter; auto path=QFileDialog::getSaveFileName(this,gpdfTr("Exportar anotaciones"),QFileInfo(source).completeBaseName()+"-anotaciones.md",gpdfTr("Markdown (*.md);;Texto (*.txt);;HTML (*.html)"),&selectedFilter,fileDialogOptions()); if(!path.isEmpty() && QFileInfo(path).suffix().isEmpty()) path+=selectedFilter.startsWith("HTML") ? ".html" : selectedFilter.startsWith(gpdfTr("Texto")) ? ".txt" : ".md"; if(!path.isEmpty()) exportAnnotationsTo(path); });
+        action(fileMenu,fileActions,gpdfTr("Exportar anotaciones…"),"exportAnnotationsAction",[this]{ if(!view->finishText() || !pdf.loaded()) return; QString selectedFilter; auto path=QFileDialog::getSaveFileName(this,gpdfTr("Exportar anotaciones"),QFileInfo(source).completeBaseName()+"-anotaciones.md",gpdfTr("Markdown (*.md);;Texto (*.txt);;HTML (*.html)"),&selectedFilter); if(!path.isEmpty() && QFileInfo(path).suffix().isEmpty()) path+=selectedFilter.startsWith("HTML") ? ".html" : selectedFilter.startsWith(gpdfTr("Texto")) ? ".txt" : ".md"; if(!path.isEmpty()) exportAnnotationsTo(path); });
         auto exportAction=findChild<QAction*>("exportAnnotationsAction"); fileMenu->removeAction(exportAction); fileMenu->insertAction(findChild<QAction*>("propertiesAction"),exportAction);
         QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); dark->setChecked(settings.value("reading/darkMode",false).toBool()); applyDarkMode(dark->isChecked());
     }
     void updateDrawingIcons() {
-        for(const auto& entry:QList<QPair<QString,QPair<int,QColor>>>{{"editTool3",{3,view->penColor}},{"highlightAction",{4,view->highlightColor}},{"underlineAction",{5,view->underlineColor}}})
+        for(const auto& entry:QList<QPair<QString,QPair<int,QColor>>>{{"editTool3",{3,view->penColor}},{"highlightAction",{4,view->highlightColor}},{"secondaryHighlightAction",{4,view->secondaryHighlightColor}},{"underlineAction",{5,view->underlineColor}}})
             if(auto action=findChild<QAction*>(entry.first)) action->setIcon(QIcon(new GpdfToolIcon(entry.second.first,entry.second.second)));
     }
     QMenu* underlineMenu(QWidget* parent) {
@@ -1646,18 +1659,28 @@ private:
                 action->setShortcut(QKeySequence()); settings.remove(name); continue;
             }
             if(action->text().trimmed().isEmpty() || name.isEmpty() || name.startsWith("recentFile") || name=="menuFindAction" || name=="searchAction" || action->isSeparator()) continue;
-            shortcutActions.append(action); action->setProperty("defaultShortcut",action->shortcut().toString(QKeySequence::PortableText));
+            shortcutActions.append(action);
+            const auto defaults=action->shortcuts();
+            action->setProperty("defaultShortcuts",QKeySequence::listToString(defaults,QKeySequence::PortableText));
             if(name=="highlightAction" && !settings.value("highlightShortcutMigrated",false).toBool()) {
                 if(settings.contains(name) && settings.value(name).toString().isEmpty()) settings.remove(name);
                 settings.setValue("highlightShortcutMigrated",true);
             }
-            if(settings.contains(name)) action->setShortcut(QKeySequence(settings.value(name).toString()));
+            QList<QKeySequence> keys;
+            const auto primary=QKeySequence::fromString(settings.value(name,defaults.value(0).toString(QKeySequence::PortableText)).toString(),QKeySequence::PortableText);
+            const auto secondary=QKeySequence::fromString(settings.value("secondary/"+name,defaults.value(1).toString(QKeySequence::PortableText)).toString(),QKeySequence::PortableText);
+            // Keep the slot positions when only the second shortcut is assigned.
+            if(!secondary.isEmpty()) keys={primary,secondary};
+            else if(!primary.isEmpty()) keys={primary};
+            action->setShortcuts(keys);
         }
     }
     void updateToolTips() {
         for(const auto& name:{"editTool0","editTool1","editTool2","editTool3","editTool4","highlightAction","underlineAction","rotateClockwiseAction"}) {
             auto action=findChild<QAction*>(name); if(!action) continue;
-            QString tip=action->text(); if(!action->shortcut().isEmpty()) tip+=" ("+action->shortcut().toString(QKeySequence::NativeText)+")";
+            QStringList keys;
+            for(const auto& key:action->shortcuts()) if(!key.isEmpty()) keys.append(key.toString(QKeySequence::NativeText));
+            QString tip=action->text(); if(!keys.isEmpty()) tip+=" ("+keys.join(" / ")+")";
             action->setToolTip(tip);
             auto toolbar=findChild<QToolBar*>("editingTools");
             if(auto button=qobject_cast<QToolButton*>(toolbar->widgetForAction(action))) { button->setToolTip(tip); button->setAccessibleName(action->text()); }
@@ -1670,26 +1693,68 @@ private:
         std::stable_sort(orderedActions.begin(),orderedActions.end(),[&](QAction* a,QAction* b){
             return collator.compare(a->text().remove('&'),b->text().remove('&'))<0;
         });
-        QDialog dialog(this); dialog.setObjectName("shortcutsDialog"); dialog.setWindowTitle(gpdfTr("Atajos de teclado")); dialog.resize(700,650);
+        QDialog dialog(this); dialog.setObjectName("shortcutsDialog"); dialog.setWindowTitle(gpdfTr("Atajos de teclado")); dialog.resize(800,650);
         auto layout=new QVBoxLayout(&dialog);
-        auto table=new QTableWidget(orderedActions.size(),2); table->setObjectName("shortcutsTable"); table->setHorizontalHeaderLabels({gpdfTr("Función"),gpdfTr("Atajo")}); table->verticalHeader()->hide(); table->horizontalHeader()->setSectionResizeMode(0,QHeaderView::Stretch); table->horizontalHeader()->setSectionResizeMode(1,QHeaderView::ResizeToContents);
-        QVector<QKeySequenceEdit*> editors;
-        for(int i=0;i<orderedActions.size();++i) { auto item=new QTableWidgetItem(orderedActions[i]->text().remove('&')); item->setFlags(item->flags() & ~Qt::ItemIsEditable); table->setItem(i,0,item); auto editor=new QKeySequenceEdit(orderedActions[i]->shortcut()); editor->setClearButtonEnabled(true); editor->setMinimumWidth(230); editors.append(editor); table->setCellWidget(i,1,editor); }
+        auto table=new QTableWidget(orderedActions.size(),3); table->setObjectName("shortcutsTable");
+        table->setHorizontalHeaderLabels({gpdfTr("Función"),gpdfTr("Atajo 1"),gpdfTr("Atajo 2")});
+        table->verticalHeader()->hide();
+        table->horizontalHeader()->setSectionResizeMode(0,QHeaderView::Stretch);
+        QList<QKeySequenceEdit*> editors;
+        for(int column=1;column<=2;++column) table->horizontalHeader()->setSectionResizeMode(column,QHeaderView::ResizeToContents);
+        for(int i=0;i<orderedActions.size();++i) {
+            auto item=new QTableWidgetItem(orderedActions[i]->text().remove('&'));
+            item->setFlags(item->flags() & ~Qt::ItemIsEditable); table->setItem(i,0,item);
+            const auto keys=orderedActions[i]->shortcuts();
+            for(int slot=0;slot<2;++slot) {
+                auto editor=new QKeySequenceEdit(keys.value(slot));
+                editor->setClearButtonEnabled(true);
+                editor->setMaximumSequenceLength(1);
+                editor->setMinimumWidth(170);
+                editors.append(editor); table->setCellWidget(i,slot+1,editor);
+            }
+        }
         layout->addWidget(table);
         auto buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel|QDialogButtonBox::RestoreDefaults); layout->addWidget(buttons);
-        connect(buttons->button(QDialogButtonBox::RestoreDefaults),&QPushButton::clicked,&dialog,[&]{ for(int i=0;i<editors.size();++i) editors[i]->setKeySequence(QKeySequence(orderedActions[i]->property("defaultShortcut").toString())); });
+        connect(buttons->button(QDialogButtonBox::RestoreDefaults),&QPushButton::clicked,&dialog,[&]{
+            for(int i=0;i<orderedActions.size();++i) {
+                const auto keys=QKeySequence::listFromString(orderedActions[i]->property("defaultShortcuts").toString(),QKeySequence::PortableText);
+                editors[2*i]->setKeySequence(keys.value(0));
+                editors[2*i+1]->setKeySequence(keys.value(1));
+            }
+        });
         connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
         connect(buttons,&QDialogButtonBox::accepted,&dialog,[&]{
             for(int i=0;i<editors.size();++i) {
                 auto key=editors[i]->keySequence();
-                if(key.count()>1) { QMessageBox::warning(&dialog,gpdfTr("Atajo inválido"),gpdfTr("Usar una sola combinación de teclas por función.")); return; }
                 for(int j=0;j<i;++j) if(!key.isEmpty() && key==editors[j]->keySequence()) {
-                    auto a=orderedActions[i]->objectName(),b=orderedActions[j]->objectName();
+                    auto a=orderedActions[i/2]->objectName(),b=orderedActions[j/2]->objectName();
                     if((a=="confirmTextAction" && b=="searchEnterAction") || (a=="searchEnterAction" && b=="confirmTextAction")) continue;
-                    QMessageBox::warning(&dialog,gpdfTr("Atajo repetido"),QString(gpdfTr("%1 ya está asignado a %2.")).arg(key.toString(QKeySequence::NativeText),orderedActions[j]->text())); return; }
+                    // Keep the newly edited slot, regardless of the alphabetical row order.
+                    const bool existingSlot=orderedActions[i/2]->shortcuts().value(i%2)==key;
+                    const int owner=existingSlot ? i : j;
+                    const int destination=existingSlot ? j : i;
+                    QMessageBox conflict(QMessageBox::Question,gpdfTr("Atajo repetido"),
+                        QString(gpdfTr("%1 ya está asignado a %2.")).arg(key.toString(QKeySequence::NativeText),table->item(owner/2,0)->text()),
+                        QMessageBox::Yes|QMessageBox::No,&dialog);
+                    conflict.setInformativeText(QString(gpdfTr("¿Querés reasignarlo a «%1»?")).arg(table->item(destination/2,0)->text()));
+                    conflict.setDefaultButton(QMessageBox::No);
+                    if(conflict.exec()!=QMessageBox::Yes) return;
+                    editors[owner]->clear();
+                    if(owner==i) break;
+                }
             }
             QSettings settings(QSettings::IniFormat,QSettings::UserScope,AppIdentity::settingsOrganization,AppIdentity::settingsApplication); settings.beginGroup("shortcuts");
-            for(int i=0;i<editors.size();++i) { auto action=orderedActions[i]; action->setShortcut(editors[i]->keySequence()); settings.setValue(action->objectName(),action->shortcut().toString(QKeySequence::PortableText)); }
+            for(int i=0;i<orderedActions.size();++i) {
+                auto action=orderedActions[i];
+                const auto name=action->objectName();
+                const auto primary=editors[2*i]->keySequence(),secondary=editors[2*i+1]->keySequence();
+                QList<QKeySequence> keys;
+                if(!secondary.isEmpty()) keys={primary,secondary};
+                else if(!primary.isEmpty()) keys={primary};
+                action->setShortcuts(keys);
+                settings.setValue(name,primary.toString(QKeySequence::PortableText));
+                settings.setValue("secondary/"+name,secondary.toString(QKeySequence::PortableText));
+            }
             updateToolTips(); installFileMenu(); dialog.accept();
         });
         dialog.exec();
@@ -2086,10 +2151,6 @@ private:
         fileDropHint->move(center-QPoint(fileDropHint->width()/2,fileDropHint->height()/2));
     }
     QAction* editAction=nullptr;
-    QPushButton* editButton;
-    QPushButton* unifyButton;
-    QPushButton* colorButton;
-    QPushButton* deleteButton;
     QLabel* pageLabel;
     QSpinBox* pageNumber;
     QSpinBox* zoomPercent;
@@ -2110,7 +2171,6 @@ private:
     std::atomic<int> searchGeneration{0};
     quint64 searchRevision=0;
     bool updatingView=false;
-    QFileDialog::Options fileDialogOptions() const { return QFileDialog::DontUseNativeDialog; }
     void error(QString value) { QMessageBox::warning(this,"GPDF",value); }
     QPointer<QMessageBox> importantWarningPopup;
     bool sessionSaveWarningShown=false;
@@ -2133,7 +2193,7 @@ private:
         pendingSearchNext=false; lastSearchRow=-1;
         searchTask->stop(); searchDebounce->stop();
         QSignalBlocker blocker(searchInput); searchInput->clear();
-        matches.clear(); searchResults->clear(); searchStatus->setText(gpdfTr("Ingresar texto para buscar."));
+        matches.clear(); searchResults->clear(); searchStatus->clear();
         view->searchPage=-1; view->searchRects.clear();
     }
     void startSearch() {
@@ -2142,8 +2202,8 @@ private:
         searchTask->stop(); searchDebounce->stop();
         searchQuery=searchInput->text().trimmed(); nextSearchPage=0; searchRevision=pdf.revision();
         matches.clear(); searchResults->clear(); view->searchPage=-1; view->searchRects.clear(); view->update();
+        if(searchQuery.isEmpty()) { searchStatus->clear(); return; }
         if(!pdf.loaded()) { searchStatus->setText(gpdfTr("Abrir un PDF para buscar.")); return; }
-        if(searchQuery.isEmpty()) { searchStatus->setText(gpdfTr("Ingresar texto para buscar.")); return; }
         if(!documentOcrReady(activeDocument)) { showOcrProgress(activeDocument); return; }
         searchStatus->setText(gpdfTr("Buscando…")); searchTask->start();
     }
@@ -2278,7 +2338,7 @@ private:
         documentOpened(path);
     }
     void open() {
-        auto path=QFileDialog::getOpenFileName(this,gpdfTr("Abrir PDF"),{},"PDF (*.pdf)",nullptr,fileDialogOptions());
+        auto path=QFileDialog::getOpenFileName(this,gpdfTr("Abrir PDF"),{},"PDF (*.pdf)");
         if(!path.isEmpty()) openPath(path);
     }
     bool writeTo(const QString& path) {
@@ -2296,7 +2356,7 @@ private:
     bool saveAs() {
         if(!view->finishText()) return false;
         if(!pdf.loaded()) return false;
-        auto path=QFileDialog::getSaveFileName(this,gpdfTr("Guardar como"),source.isEmpty() ? "estudio-anotado.pdf" : source,"PDF (*.pdf)",nullptr,fileDialogOptions());
+        auto path=QFileDialog::getSaveFileName(this,gpdfTr("Guardar como"),source.isEmpty() ? "estudio-anotado.pdf" : source,"PDF (*.pdf)");
         if(path.isEmpty()) return false;
         if(!path.endsWith(".pdf",Qt::CaseInsensitive)) path+=".pdf";
         return writeTo(path);
@@ -2312,7 +2372,7 @@ private:
         view->setFocus(Qt::OtherFocusReason);
     }
     void zoom(double delta) {
-        setZoom(std::clamp((view->fit==PageView::Manual ? view->scale : view->effectiveScale)+delta,0.5,3.0));
+        setZoom((view->fit==PageView::Manual ? view->scale : view->effectiveScale)+delta);
     }
     void setZoom(double value,QPoint anchor=QPoint(-1,-1)) {
         if(!view->finishText()) { QSignalBlocker blocker(zoomPercent); zoomPercent->setValue(int(std::lround(view->scale*100))); return; }
@@ -2324,7 +2384,7 @@ private:
         QPointF relative=previousRect.isEmpty() ? QPointF(0,0) : QPointF((content.x()-previousRect.left())/previousRect.width(),(content.y()-previousRect.top())/previousRect.height());
         updatingView=true;
         view->setFit(PageView::Manual);
-        view->setZoom(std::clamp(value,0.5,3.0));
+        view->setZoom(std::clamp(value,minZoom,maxZoom));
         QSignalBlocker blocker(zoomPercent);
         zoomPercent->setValue(int(std::lround(view->scale*100)));
         QRectF nextRect=view->pageRects.value(anchorPage);
@@ -2379,12 +2439,7 @@ private:
         }
         view->selectedAnnotation=index;
         if(index>=0) { view->first=view->last=-1; view->allTextSelected=false; }
-        bool editable=hasAnnotationEditor(index);
-        editButton->setEnabled(editable);
-        if(editAction) editAction->setEnabled(editable);
-        deleteButton->setEnabled(pdf.canEditAnnotation(index));
-        colorButton->setEnabled(pdf.canColorAnnotation(index));
-        unifyButton->setEnabled(pdf.annotationType(index)==FPDF_ANNOT_HIGHLIGHT && pdf.canEditAnnotation(index));
+        if(editAction) editAction->setEnabled(hasAnnotationEditor(index));
         view->update();
         if(index>=0) {
             auto point=view->devicePoint(pdf.annotationRect(index).center());

@@ -20,6 +20,8 @@ int main(int argc,char** argv) {
             require(restarted.findChild<QAction*>("saveAsFileAction")->shortcut()==QKeySequence(args[3]=="en" ? "Ctrl+Shift+S" : "Ctrl+Shift+G"),"default shortcuts follow language after restart");
             require(restarted.findChild<QAction*>("focusSearch")->shortcut()==QKeySequence("Ctrl+Alt+F"),"custom shortcut survives language restart");
             require(restarted.findChild<QAction*>("workbenchAction")->shortcut()==QKeySequence("Ctrl+Alt+W"),"custom Workbench shortcut survives restart");
+            require(restarted.findChild<QAction*>("goNext")->shortcuts().value(1)==QKeySequence("Ctrl+V")
+                && restarted.findChild<QAction*>("pasteAnnotationAction")->shortcut().isEmpty(),"reassigned secondary shortcut survives restart");
             return 0;
         }
         QTemporaryDir directory; require(directory.isValid(),"isolated settings directory");
@@ -111,6 +113,56 @@ int main(int argc,char** argv) {
         QTimer::singleShot(0,[&]{ if(auto dialog=window.findChild<QDialog*>("workbenchDialog")) { workbenchOpened=true; dialog->reject(); } });
         QKeyEvent workbenchKey(QEvent::KeyPress,Qt::Key_W,Qt::ControlModifier|Qt::ShiftModifier); QApplication::sendEvent(&window,&workbenchKey);
         require(workbenchOpened,"Workbench opens through its keyboard shortcut");
+        auto paste=window.findChild<QAction*>("pasteAnnotationAction");
+        auto forward=window.findChild<QAction*>("goForward");
+        bool conflictNamesOriginal=false;
+        QTimer::singleShot(0,[&]{
+            auto dialog=window.findChild<QDialog*>("shortcutsDialog");
+            auto table=dialog->findChild<QTableWidget*>("shortcutsTable");
+            for(int row=0;row<table->rowCount();++row) if(table->item(row,0)->text()==forward->text().remove('&'))
+                qobject_cast<QKeySequenceEdit*>(table->cellWidget(row,2))->setKeySequence(paste->shortcut());
+            QTimer::singleShot(0,dialog,[&]{
+                if(auto warning=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+                    conflictNamesOriginal=warning->text().endsWith(paste->text().remove('&')+".");
+                    warning->done(QMessageBox::No);
+                }
+            });
+            dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+            dialog->reject();
+        });
+        window.findChild<QAction*>("configureShortcutsAction")->trigger();
+        require(conflictNamesOriginal,"duplicate shortcut names the original action regardless of sorting");
+        auto nextPage=window.findChild<QAction*>("goNext");
+        QTimer::singleShot(0,[&]{
+            auto dialog=window.findChild<QDialog*>("shortcutsDialog");
+            auto table=dialog->findChild<QTableWidget*>("shortcutsTable");
+            for(int row=0;row<table->rowCount();++row) if(table->item(row,0)->text()==nextPage->text().remove('&'))
+                qobject_cast<QKeySequenceEdit*>(table->cellWidget(row,2))->setKeySequence(QKeySequence("Ctrl+V"));
+            QTimer::singleShot(0,dialog,[&]{
+                if(auto conflict=qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) conflict->done(QMessageBox::Yes);
+            });
+            dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+            if(dialog->isVisible()) dialog->reject();
+        });
+        window.findChild<QAction*>("configureShortcutsAction")->trigger();
+        require(nextPage->shortcuts()==QList<QKeySequence>{QKeySequence("Right"),QKeySequence("Ctrl+V")}
+            && paste->shortcut().isEmpty(),"reassignment clears the old shortcut and keeps both navigation shortcuts");
+        window.openDocument(first);
+        auto canvas=window.findChild<QScrollArea*>()->widget();
+        window.findChild<QAction*>("goFirst")->trigger();
+        canvas->setFocus();
+        app.processEvents();
+        auto pageNumber=window.findChild<QSpinBox*>("pageNumber");
+        require(pageNumber->value()==1 && nextPage->isEnabled(),"navigation shortcut fixture starts on the first page");
+        QKeyEvent nextPageKey(QEvent::KeyPress,Qt::Key_V,Qt::ControlModifier);
+        QApplication::sendEvent(canvas,&nextPageKey);
+        require(pageNumber->value()==2,"secondary Ctrl+V advances the page");
+        QApplication::clipboard()->setText("Texto pegado");
+        editor.clear();
+        QKeyEvent pasteTextKey(QEvent::KeyPress,Qt::Key_V,Qt::ControlModifier);
+        QApplication::sendEvent(&editor,&pasteTextKey);
+        require(editor.text()=="Texto pegado" && pageNumber->value()==2,"Ctrl+V still pastes in text fields");
+        window.findChild<QAction*>("closeDocumentAction")->trigger();
         bool sorted=true,edited=false;
         QTimer::singleShot(0,[&]{
             auto dialog=window.findChild<QDialog*>("shortcutsDialog"); if(!dialog) return;
@@ -148,7 +200,7 @@ int main(int argc,char** argv) {
         require(rotate->text()==(english ? "Rotate 90° clockwise" : "Girar 90° a la derecha"),"rotation tooltip translation");
         for(int turn=0;turn<4;++turn) {
             auto orientation=window.findChild<QAction*>(QString("viewRotation%1").arg(turn));
-            require(orientation && orientation->shortcut().isEmpty() && !orientation->property("defaultShortcut").isValid(),"fixed orientations are excluded from configurable shortcuts in both languages");
+            require(orientation && orientation->shortcut().isEmpty() && !orientation->property("defaultShortcuts").isValid(),"fixed orientations are excluded from configurable shortcuts in both languages");
         }
         settings.sync(); require(!settings.contains("shortcuts/viewRotation1"),"obsolete saved rotation shortcut removed");
         require(window.findChild<QAction*>("focusSearch")->shortcut()==QKeySequence("Ctrl+Alt+F"),"custom search shortcut preserved");
@@ -156,7 +208,7 @@ int main(int argc,char** argv) {
         const QHash<QString,QString> expectedShortcuts={{"saveFileAction",english ? "Ctrl+S" : "Ctrl+G"},{"saveAsFileAction",english ? "Ctrl+Shift+S" : "Ctrl+Shift+G"},{"highlightAction",english ? "Ctrl+H" : "Ctrl+S"},{"secondaryHighlightAction",english ? "Ctrl+Shift+H" : "Ctrl+Shift+S"},{"focusSearch",english ? "Ctrl+F" : "Ctrl+B"},{"goPage",english ? "Ctrl+G" : "Ctrl+I"},{"toggleAnnotations","Ctrl+N"},{"underlineAction","Ctrl+U"}};
         for(auto i=expectedShortcuts.cbegin();i!=expectedShortcuts.cend();++i) {
             auto action=window.findChild<QAction*>(i.key());
-            require(action->property("defaultShortcut").toString()==i.value(),"shortcut defaults match interface language");
+            require(action->property("defaultShortcuts").toString()==i.value(),"shortcut defaults match interface language");
             if(i.key()!="saveFileAction" && i.key()!="focusSearch") require(action->shortcut()==QKeySequence(i.value()),"language shortcut active");
         }
         auto search=window.findChild<QAction*>("focusSearch");
